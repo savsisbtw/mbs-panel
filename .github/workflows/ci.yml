@@ -30,7 +30,7 @@ jobs:
           BOT_TOKEN: "x"
           BOT_USERNAME: "x"
           ADMIN_IDS: "1"
-          ADMIN_PANEL_PASSWORD: "x"
+          ADMIN_PANEL_PASSWORD: "ci-test-password-not-real"
           PANEL_DOMAIN: "panel.test"
           SUB_DOMAIN: "sub.test"
           SITE_DOMAIN: "test"
