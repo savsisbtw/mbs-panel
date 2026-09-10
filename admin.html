@@ -1,0 +1,788 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MBS Panel</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&family=Fira+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    /* Tokens lifted from remnawave/frontend's actual Mantine theme.ts (GitHub-dark scale, cyan primary). */
+    --bg: #0d1117; --sidebar: #010409; --card-tint: rgba(255,255,255,0.02); --card2-tint: rgba(255,255,255,0.045);
+    --border: rgba(255,255,255,0.08); --border-strong: rgba(255,255,255,0.14);
+    --text: #c9d1d9; --text-dim: #b1bac4; --muted: #8b949e; --muted2: #6e7681;
+    --accent: #22b8cf; --accent-deep: #0c8599; --accent-dim: rgba(34,184,207,0.12); --accent-border: rgba(34,184,207,0.35);
+    --green: #3fb950; --red: #f85149; --yellow: #d29922; --blue: #58a6ff; --pink: #db61a2;
+    --ease: cubic-bezier(0.16, 1, 0.3, 1);
+    --radius: 8px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: Montserrat, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased; font-size: 14px;
+  }
+  button, input, select { font-family: inherit; font-size: 14px; }
+  a { color: var(--accent); text-decoration: none; }
+
+  /* ---------- Login ---------- */
+  #login-screen {
+    min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px;
+  }
+  .login-card {
+    max-width: 340px; width: 100%; background: var(--card-tint); border: 1px solid var(--border);
+    border-radius: 14px; padding: 32px 28px;
+    opacity: 0; animation: fadeIn 0.25s linear forwards;
+  }
+  @keyframes fadeIn { to { opacity: 1; } }
+  @keyframes enter { to { opacity: 1; transform: translateY(0); filter: blur(0); } }
+  .splash { display: flex; flex-direction: column; align-items: center; text-align: center; padding-bottom: 22px; }
+  .splash-mark {
+    width: 44px; height: 44px; border-radius: 13px; margin-bottom: 14px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+    display: flex; align-items: center; justify-content: center;
+    opacity: 0; transform: scale(0.6) rotate(-8deg); filter: blur(4px);
+    animation: splashMark 0.6s var(--ease) 0.05s forwards;
+  }
+  .splash-mark svg { width: 24px; height: 24px; }
+  .splash-title {
+    font-size: 19px; font-weight: 700; letter-spacing: -0.01em;
+    opacity: 0; transform: translateY(8px); filter: blur(3px);
+    animation: splashRise 0.5s var(--ease) 0.28s forwards;
+  }
+  .splash-tagline {
+    font-size: 11.5px; color: var(--muted2); letter-spacing: 0.04em; margin-top: 4px;
+    opacity: 0;
+    animation: splashFade 0.5s var(--ease) 0.5s forwards;
+  }
+  @keyframes splashMark { to { opacity: 1; transform: scale(1) rotate(0deg); filter: blur(0); } }
+  @keyframes splashRise { to { opacity: 1; transform: translateY(0); filter: blur(0); } }
+  @keyframes splashFade { to { opacity: 1; } }
+  .login-card h1 { font-size: 17px; margin: 0 0 4px; font-weight: 600; }
+  .login-card p { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
+  input[type=password], input[type=text] {
+    width: 100%; background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 11px 13px; color: var(--text); transition: border-color 0.2s var(--ease);
+  }
+  input:focus { outline: none; border-color: var(--accent); }
+  .btn {
+    padding: 10px 18px; border-radius: var(--radius); border: 1px solid var(--accent-border); cursor: pointer;
+    background: linear-gradient(135deg, rgba(34,184,207,0.15) 0%, rgba(12,133,153,0.1) 100%); color: var(--accent);
+    font-weight: 600; transition: all 0.2s ease;
+  }
+  .btn:hover { background: rgba(34,184,207,0.22); }
+  .btn:active { transform: scale(0.97); }
+  .btn.block { width: 100%; margin-top: 14px; }
+  .btn.ghost { background: transparent; color: var(--text-dim); border: 1px solid var(--border); }
+  .btn.ghost:hover { color: var(--text); border-color: var(--border-strong); background: rgba(255,255,255,0.03); }
+  .btn.danger { background: rgba(248,81,73,0.1); color: var(--red); border: 1px solid rgba(248,81,73,0.3); }
+  .btn.danger:hover { background: rgba(248,81,73,0.18); }
+  #login-err { color: var(--red); font-size: 13px; min-height: 16px; margin-top: 10px; }
+
+  /* ---------- App shell ---------- */
+  #app { display: none; min-height: 100vh; grid-template-columns: 216px 1fr; }
+  #app.show { display: grid; }
+  .sidebar {
+    background: var(--sidebar); border-right: 1px solid var(--border); padding: 18px 10px;
+    display: flex; flex-direction: column;
+  }
+  .brand { display: flex; align-items: center; gap: 9px; font-weight: 600; font-size: 14px; padding: 8px 10px 22px; }
+  .brand .mark {
+    width: 22px; height: 22px; border-radius: 7px; flex: none;
+    background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+    display: flex; align-items: center; justify-content: center;
+  }
+  .brand .mark svg { width: 13px; height: 13px; }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px; padding: 9px 11px; border-radius: 8px;
+    color: var(--muted); cursor: pointer; margin-bottom: 1px; font-size: 13.5px;
+    transition: background 0.2s var(--ease), color 0.2s var(--ease);
+  }
+  .nav-item svg { width: 16px; height: 16px; flex: none; opacity: 0.85; }
+  .nav-item:hover { background: var(--card2-tint); color: var(--text); }
+  .nav-item.active { background: var(--accent-dim); color: var(--accent); }
+  .nav-item.active svg { opacity: 1; }
+  .sidebar-footer { margin-top: auto; padding: 10px 0 0; }
+
+  .main { padding: 30px 40px; max-width: 1120px; }
+  .page-title { font-size: 20px; font-weight: 600; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .page-sub { color: var(--muted); font-size: 13px; margin: 0 0 26px; }
+
+  .view { display: none; }
+  .view.active { display: block; }
+
+  .reveal {
+    opacity: 0; animation: fadeIn 0.25s linear forwards;
+  }
+
+  .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; margin-bottom: 30px; }
+  .stat-card {
+    background: var(--bg); position: relative; padding: 14px 18px 16px;
+    transition: background 0.2s var(--ease);
+  }
+  .stat-card::before { content: ""; position: absolute; inset: 0; background: var(--card-tint); }
+  .stat-card:hover::before { background: var(--card2-tint); }
+  .stat-card > * { position: relative; }
+  .stat-card .l { color: var(--muted); font-size: 11.5px; margin-bottom: 10px; }
+  .stat-card .row { display: flex; align-items: center; gap: 8px; }
+  .stat-card svg { width: 16px; height: 16px; flex: none; }
+  .stat-card .v { font-size: 19px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; font-family: "Fira Mono", ui-monospace, monospace; }
+
+  table { width: 100%; border-collapse: collapse; }
+  .table-wrap {
+    background: var(--card-tint); border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
+  }
+  th {
+    text-align: left; font-size: 12px; color: var(--muted); font-weight: 500;
+    padding: 12px 16px; border-bottom: 1px solid var(--border); text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  td { padding: 13px 16px; border-bottom: 1px solid var(--border); font-size: 13.5px; }
+  tr:last-child td { border-bottom: none; }
+  tbody tr { transition: background 0.15s var(--ease); }
+  tbody tr:hover { background: var(--card2-tint); }
+
+  .badge {
+    display: inline-block; padding: 2px 9px; border-radius: var(--radius); font-size: 11.5px; font-weight: 600;
+    border: 1px solid; background: transparent;
+  }
+  .badge.ok { border-color: rgba(63,185,80,0.4); color: var(--green); }
+  .badge.bad { border-color: rgba(248,81,73,0.4); color: var(--red); }
+  .badge.warn { border-color: rgba(210,153,34,0.4); color: var(--yellow); }
+
+  .section { margin-bottom: 32px; }
+  .section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .section-head h2 { font-size: 15px; margin: 0; font-weight: 600; }
+
+  .check-row { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 14px; }
+  .check { display: flex; align-items: flex-start; gap: 8px; font-size: 13.5px; cursor: pointer; }
+  .check input { margin-top: 2px; accent-color: var(--accent); }
+  .check-hint { color: var(--muted); font-size: 12px; }
+  .form-row { display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+  .form-row > * { flex: 1; min-width: 140px; }
+  label.f { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+
+  /* ---------- Custom dropdown (replaces native <select> — no OS-rendered white
+     popup, animated open/close) ---------- */
+  .dd { position: relative; }
+  .dd-trigger {
+    width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 11px 13px; color: var(--text); cursor: pointer; text-align: left;
+    transition: border-color 0.2s var(--ease);
+  }
+  .dd-trigger:hover { border-color: var(--border-strong); }
+  .dd.dd-open .dd-trigger { border-color: var(--accent); }
+  .dd-trigger-label.placeholder { color: var(--muted); }
+  .dd-chevron { width: 15px; height: 15px; color: var(--muted); flex: none; transition: transform 0.2s var(--ease); }
+  .dd.dd-open .dd-chevron { transform: rotate(180deg); }
+  .dd-menu {
+    position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 60;
+    background: #161b22; border: 1px solid var(--border-strong); border-radius: 10px;
+    padding: 6px; max-height: 264px; overflow: hidden; display: flex; flex-direction: column;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.45);
+    opacity: 0; transform: translateY(-6px) scale(0.98); filter: blur(3px);
+    pointer-events: none; transition: opacity 0.16s var(--ease), transform 0.16s var(--ease), filter 0.16s var(--ease);
+  }
+  .dd-menu.show { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); pointer-events: auto; }
+  .dd-menu.closing { opacity: 0; transform: translateY(-4px) scale(0.99); filter: blur(2px); }
+  .dd-search {
+    background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 7px;
+    padding: 8px 10px; color: var(--text); margin-bottom: 6px; flex: none; width: 100%;
+  }
+  .dd-search:focus { outline: none; border-color: var(--accent); }
+  .dd-list { overflow-y: auto; }
+  .dd-option { padding: 9px 10px; border-radius: 7px; cursor: pointer; font-size: 13.5px; transition: background 0.12s var(--ease); }
+  .dd-option:hover { background: var(--card2-tint); }
+  .dd-option.selected { color: var(--accent); }
+  .dd-empty { padding: 10px; color: var(--muted); font-size: 13px; text-align: center; }
+
+  .tabs { display: flex; gap: 4px; margin-bottom: 18px; background: var(--card-tint); border: 1px solid var(--border); padding: 4px; border-radius: 10px; width: fit-content; }
+  .tab { padding: 8px 16px; border-radius: 7px; cursor: pointer; color: var(--muted); font-size: 13px; transition: all 0.2s var(--ease); }
+  .tab.active { background: var(--card2-tint); color: var(--text); }
+
+  .code-box {
+    background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px;
+    font-family: "Fira Mono", ui-monospace, monospace; font-size: 12.5px; color: var(--accent);
+    word-break: break-all; position: relative;
+  }
+  .copy-btn {
+    position: absolute; top: 8px; right: 8px; background: var(--card2-tint); border: 1px solid var(--border);
+    color: var(--muted); border-radius: 6px; padding: 4px 8px; font-size: 11px; cursor: pointer;
+  }
+  .copy-btn:hover { color: var(--text); }
+
+  .muted-btn { background: none; border: 1px solid transparent; color: var(--muted); cursor: pointer; padding: 4px 8px; border-radius: 6px; font-size: 12.5px; transition: all 0.15s ease; }
+  .muted-btn:hover { color: var(--accent); border-color: var(--accent-border); background: var(--accent-dim); }
+
+  .empty { text-align: center; color: var(--muted); padding: 40px 0; font-size: 13px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+    .reveal, .login-card, .splash-mark, .splash-title, .splash-tagline { opacity: 1 !important; transform: none !important; filter: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<div id="login-screen">
+  <div class="login-card">
+    <div class="splash">
+      <div class="splash-mark"><svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="16" x2="6" y2="8"/><line x1="12" y1="19" x2="12" y2="5"/><line x1="18" y1="14" x2="18" y2="10"/></svg></div>
+      <div class="splash-title">MBS Panel</div>
+      <div class="splash-tagline">made by savsis</div>
+    </div>
+    <h1>Вход</h1>
+    <p>Введи пароль администратора</p>
+    <input type="password" id="login-password" placeholder="Пароль" onkeydown="if(event.key==='Enter')login()">
+    <button class="btn block" onclick="login()">Войти</button>
+    <div id="login-err"></div>
+  </div>
+</div>
+
+<div id="app">
+  <div class="sidebar">
+    <div class="brand"><div class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="16" x2="6" y2="8"/><line x1="12" y1="19" x2="12" y2="5"/><line x1="18" y1="14" x2="18" y2="10"/></svg></div>MBS Panel</div>
+    <div class="nav-item active" data-view="dashboard" onclick="showView('dashboard')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>Дашборд</div>
+    <div class="nav-item" data-view="subscriptions" onclick="showView('subscriptions')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="7" y1="9" x2="17" y2="9"/><line x1="7" y1="13" x2="17" y2="13"/><line x1="7" y1="17" x2="13" y2="17"/></svg>Подписки</div>
+    <div class="nav-item" data-view="gifts" onclick="showView('gifts')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="13" rx="1.5"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="12" y1="8" x2="12" y2="21"/><path d="M12 8c-1.2 0-2.3-1.3-2.3-2.6C9.7 4 10.6 3 11.6 3c1.4 0 2.4 2 .4 5"/><path d="M12 8c1.2 0 2.3-1.3 2.3-2.6C14.3 4 13.4 3 12.4 3c-1.4 0-2.4 2-.4 5"/></svg>Гифт-коды</div>
+    <div class="nav-item" data-view="nodes" onclick="showView('nodes')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><line x1="7" y1="7" x2="7.01" y2="7"/><line x1="7" y1="17" x2="7.01" y2="17"/></svg>Ноды</div>
+    <div class="nav-item" data-view="traffic" onclick="showView('traffic')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3,13 8,13 10,7 14,19 16,13 21,13"/></svg>Трафик</div>
+    <div class="sidebar-footer">
+      <button class="btn ghost" style="width:100%" onclick="logout()">Выйти</button>
+    </div>
+  </div>
+
+  <div class="main">
+    <div id="view-dashboard" class="view active">
+      <div class="page-title">Дашборд</div>
+      <div class="page-sub">Общая статистика по сервису</div>
+      <div class="stat-grid" id="stat-grid"></div>
+      <div class="section">
+        <div class="section-head"><h2>Последние подписки</h2></div>
+        <div class="table-wrap"><table><thead><tr>
+          <th>Пользователь</th><th>Сервер</th><th>Тариф</th><th>Истекает</th><th>Статус</th>
+        </tr></thead><tbody id="recent-subs-body"></tbody></table></div>
+      </div>
+    </div>
+
+    <div id="view-subscriptions" class="view">
+      <div class="page-title">Подписки</div>
+      <div class="page-sub">Все выданные подписки</div>
+      <div class="table-wrap"><table><thead><tr>
+        <th>Пользователь</th><th>Сервер</th><th>Тариф</th><th>Выдана</th><th>Истекает</th><th>Статус</th><th></th>
+      </tr></thead><tbody id="subs-body"></tbody></table></div>
+    </div>
+
+    <div id="view-gifts" class="view">
+      <div class="page-title">Гифт-коды</div>
+      <div class="page-sub">Ссылки, которые сразу выдают подписку — работают даже для тех, кто ни разу не открывал бота</div>
+      <div class="section">
+        <div class="form-row">
+          <div><label class="f">Сервер</label><div id="gift-node" class="dd"></div></div>
+          <div><label class="f">Срок</label><div id="gift-plan" class="dd"></div></div>
+          <div style="flex:0"><label class="f">&nbsp;</label><button class="btn" onclick="createGift()">Создать</button></div>
+        </div>
+        <div id="gift-result"></div>
+      </div>
+      <div class="table-wrap"><table><thead><tr>
+        <th>Сервер</th><th>Срок</th><th>Создан</th><th>Статус</th><th>Ссылка</th>
+      </tr></thead><tbody id="gifts-body"></tbody></table></div>
+    </div>
+
+    <div id="view-nodes" class="view">
+      <div class="page-title">Ноды</div>
+      <div class="page-sub">Локации, из которых бот выдаёт подписки</div>
+
+      <div class="section">
+        <div class="table-wrap"><table><thead><tr>
+          <th>Локация</th><th>Адрес</th><th>Тип</th><th>Статус</th><th>Live</th><th></th>
+        </tr></thead><tbody id="nodes-body"></tbody></table></div>
+      </div>
+
+      <div class="section">
+        <div class="section-head"><h2>Добавить ноду</h2></div>
+        <div class="tabs">
+          <div class="tab active" data-tab="guide" onclick="switchNodeTab('guide')">Гайд по установке</div>
+          <div class="tab" data-tab="manual" onclick="switchNodeTab('manual')">Вручную</div>
+        </div>
+
+        <div id="node-tab-guide">
+          <p class="page-sub" style="margin-bottom:16px">Заполни данные новой локации — панель сгенерирует ключи и команду, включит TCP+Reality, gRPC+Reality и XHTTP+Reality разом. Выполни команду на чистом Ubuntu-сервере (по SSH) — Xray установится и настроится сам, ничего дополнительно передавать не нужно.</p>
+          <div class="form-row">
+            <div><label class="f">Страна</label><div id="ng-country" class="dd"></div></div>
+            <div><label class="f">Название</label><input type="text" id="ng-label" placeholder="Например: Финляндия (fi2)"></div>
+            <div><label class="f">Домен/адрес</label><input type="text" id="ng-address" placeholder="fi2.example.com"></div>
+          </div>
+          <div class="form-row">
+            <div><label class="f">Порт (TCP)</label><input type="text" id="ng-port" value="443"></div>
+            <div><label class="f">SNI-маскировка</label><input type="text" id="ng-sni" value="www.wildberries.ru"></div>
+          </div>
+          <div class="check-row">
+            <label class="check"><input type="checkbox" id="ng-ws"> + WS+TLS с настоящим сертификатом <span class="check-hint">(нужен уже привязанный A-record на этот адрес — certbot выпустит серт прямо в скрипте)</span></label>
+            <label class="check"><input type="checkbox" id="ng-hy" onchange="document.getElementById('ng-hy-port-wrap').style.display=this.checked?'block':'none'"> + Hysteria2 <span class="check-hint">(отдельный процесс по UDP/QUIC, свой самоподписанный серт — DNS не нужен)</span></label>
+          </div>
+          <div class="form-row" id="ng-hy-port-wrap" style="display:none">
+            <div><label class="f">Порт Hysteria2 (UDP)</label><input type="text" id="ng-hy-port" value="443"></div>
+          </div>
+          <button class="btn" onclick="generateGuide()">Сгенерировать команду</button>
+          <div id="guide-result"></div>
+        </div>
+
+        <div id="node-tab-manual" style="display:none">
+          <p class="page-sub" style="margin-bottom:16px">Для ноды, которую ты уже настроил(а) сам(а) — просто вставь её параметры Reality.</p>
+          <div class="form-row">
+            <div><label class="f">Страна</label><div id="nm-country" class="dd"></div></div>
+            <div><label class="f">Название</label><input type="text" id="nm-label" placeholder="Название локации"></div>
+            <div><label class="f">Код</label><input type="text" id="nm-code" placeholder="fi2"></div>
+          </div>
+          <div class="form-row">
+            <div><label class="f">Адрес</label><input type="text" id="nm-address" placeholder="fi2.example.com"></div>
+            <div><label class="f">Порт</label><input type="text" id="nm-port" value="443"></div>
+          </div>
+          <div class="form-row">
+            <div><label class="f">Public key</label><input type="text" id="nm-pbk"></div>
+            <div><label class="f">Short ID</label><input type="text" id="nm-sid"></div>
+          </div>
+          <div class="form-row">
+            <div><label class="f">SNI</label><input type="text" id="nm-sni" value="www.wildberries.ru"></div>
+            <div><label class="f">Shared UUID (если нодой управляешь не ты)</label><input type="text" id="nm-uuid" placeholder="необязательно"></div>
+          </div>
+          <button class="btn" onclick="createManualNode()">Добавить ноду</button>
+          <div id="manual-result"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="view-traffic" class="view">
+      <div class="page-title">Трафик</div>
+      <div class="page-sub">Суммарно по всем нодам, live через Xray Stats API</div>
+      <div class="stat-grid" id="traffic-stat-grid" style="grid-template-columns:repeat(3,1fr)"></div>
+      <div class="section">
+        <div class="section-head"><h2>По подпискам</h2></div>
+        <div class="table-wrap"><table><thead><tr>
+          <th>Пользователь</th><th>Сервер</th><th>Входящий</th><th>Исходящий</th><th>Всего</th>
+        </tr></thead><tbody id="traffic-body"></tbody></table></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function esc(s) {
+  if (s === null || s === undefined) return "";
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+async function api(path, opts) {
+  const res = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", ...(opts && opts.headers) } });
+  if (res.status === 401) { showLogin(); throw new Error("unauthorized"); }
+  if (!res.ok) throw new Error(await res.text());
+  const ct = res.headers.get("content-type") || "";
+  return ct.includes("application/json") ? res.json() : res.text();
+}
+
+function showLogin() {
+  document.getElementById("login-screen").style.display = "flex";
+  document.getElementById("app").classList.remove("show");
+}
+function showApp() {
+  document.getElementById("login-screen").style.display = "none";
+  document.getElementById("app").classList.add("show");
+  loadDashboard();
+}
+
+async function login() {
+  const password = document.getElementById("login-password").value;
+  const err = document.getElementById("login-err");
+  err.textContent = "";
+  try {
+    await api("/admin/api/login", { method: "POST", body: JSON.stringify({ password }) });
+    showApp();
+  } catch (e) {
+    err.textContent = "Неверный пароль";
+  }
+}
+async function logout() {
+  await api("/admin/api/logout", { method: "POST" });
+  showLogin();
+}
+
+function showView(name) {
+  document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
+  document.querySelectorAll(".nav-item").forEach((n) => n.classList.remove("active"));
+  document.getElementById("view-" + name).classList.add("active");
+  document.querySelector(`.nav-item[data-view="${name}"]`).classList.add("active");
+  if (name === "dashboard") loadDashboard();
+  if (name === "subscriptions") loadSubscriptions();
+  if (name === "gifts") loadGifts();
+  if (name === "nodes") loadNodes();
+  if (name === "traffic") loadTraffic();
+}
+
+const COUNTRIES = [
+  ["AU", "Австралия"], ["AT", "Австрия"], ["AZ", "Азербайджан"], ["AL", "Албания"], ["DZ", "Алжир"],
+  ["AO", "Ангола"], ["AD", "Андорра"], ["AG", "Антигуа и Барбуда"], ["AR", "Аргентина"], ["AM", "Армения"],
+  ["AF", "Афганистан"], ["BS", "Багамы"], ["BD", "Бангладеш"], ["BB", "Барбадос"], ["BH", "Бахрейн"],
+  ["BY", "Беларусь"], ["BZ", "Белиз"], ["BE", "Бельгия"], ["BJ", "Бенин"], ["BG", "Болгария"],
+  ["BO", "Боливия"], ["BA", "Босния и Герцеговина"], ["BW", "Ботсвана"], ["BR", "Бразилия"], ["BN", "Бруней"],
+  ["BF", "Буркина-Фасо"], ["BI", "Бурунди"], ["BT", "Бутан"], ["VU", "Вануату"], ["VA", "Ватикан"],
+  ["GB", "Великобритания"], ["HU", "Венгрия"], ["VE", "Венесуэла"], ["TL", "Восточный Тимор"], ["VN", "Вьетнам"],
+  ["GA", "Габон"], ["HT", "Гаити"], ["GY", "Гайана"], ["GM", "Гамбия"], ["GH", "Гана"],
+  ["GT", "Гватемала"], ["GN", "Гвинея"], ["GW", "Гвинея-Бисау"], ["DE", "Германия"], ["HN", "Гондурас"],
+  ["HK", "Гонконг"], ["GD", "Гренада"], ["GR", "Греция"], ["GE", "Грузия"], ["CD", "ДР Конго"],
+  ["DK", "Дания"], ["DJ", "Джибути"], ["DM", "Доминика"], ["DO", "Доминиканская Республика"], ["EG", "Египет"],
+  ["ZM", "Замбия"], ["ZW", "Зимбабве"], ["IL", "Израиль"], ["IN", "Индия"], ["ID", "Индонезия"],
+  ["JO", "Иордания"], ["IQ", "Ирак"], ["IR", "Иран"], ["IE", "Ирландия"], ["IS", "Исландия"],
+  ["ES", "Испания"], ["IT", "Италия"], ["YE", "Йемен"], ["KP", "КНДР"], ["CV", "Кабо-Верде"],
+  ["KZ", "Казахстан"], ["KH", "Камбоджа"], ["CM", "Камерун"], ["CA", "Канада"], ["QA", "Катар"],
+  ["KE", "Кения"], ["CY", "Кипр"], ["KG", "Киргизия"], ["KI", "Кирибати"], ["CN", "Китай"],
+  ["CO", "Колумбия"], ["KM", "Коморы"], ["CG", "Конго"], ["CR", "Коста-Рика"], ["CI", "Кот-д'Ивуар"],
+  ["CU", "Куба"], ["KW", "Кувейт"], ["LA", "Лаос"], ["LV", "Латвия"], ["LS", "Лесото"],
+  ["LR", "Либерия"], ["LB", "Ливан"], ["LY", "Ливия"], ["LT", "Литва"], ["LI", "Лихтенштейн"],
+  ["LU", "Люксембург"], ["MU", "Маврикий"], ["MR", "Мавритания"], ["MG", "Мадагаскар"], ["MO", "Макао"],
+  ["MW", "Малави"], ["MY", "Малайзия"], ["ML", "Мали"], ["MV", "Мальдивы"], ["MT", "Мальта"],
+  ["MA", "Марокко"], ["MH", "Маршалловы Острова"], ["MX", "Мексика"], ["FM", "Микронезия"], ["MZ", "Мозамбик"],
+  ["MD", "Молдова"], ["MC", "Монако"], ["MN", "Монголия"], ["MM", "Мьянма"], ["NA", "Намибия"],
+  ["NR", "Науру"], ["NP", "Непал"], ["NE", "Нигер"], ["NG", "Нигерия"], ["NL", "Нидерланды"],
+  ["NI", "Никарагуа"], ["NZ", "Новая Зеландия"], ["NO", "Норвегия"], ["AE", "ОАЭ"], ["OM", "Оман"],
+  ["PK", "Пакистан"], ["PW", "Палау"], ["PA", "Панама"], ["PG", "Папуа — Новая Гвинея"], ["PY", "Парагвай"],
+  ["PE", "Перу"], ["PL", "Польша"], ["PT", "Португалия"], ["RU", "Россия"], ["RW", "Руанда"],
+  ["RO", "Румыния"], ["US", "США"], ["SV", "Сальвадор"], ["WS", "Самоа"], ["SM", "Сан-Марино"],
+  ["ST", "Сан-Томе и Принсипи"], ["SA", "Саудовская Аравия"], ["MK", "Северная Македония"], ["SC", "Сейшелы"], ["SN", "Сенегал"],
+  ["VC", "Сент-Винсент и Гренадины"], ["KN", "Сент-Китс и Невис"], ["LC", "Сент-Люсия"], ["RS", "Сербия"], ["SG", "Сингапур"],
+  ["SY", "Сирия"], ["SK", "Словакия"], ["SI", "Словения"], ["SB", "Соломоновы Острова"], ["SO", "Сомали"],
+  ["SD", "Судан"], ["SR", "Суринам"], ["SL", "Сьерра-Леоне"], ["TJ", "Таджикистан"], ["TH", "Таиланд"],
+  ["TW", "Тайвань"], ["TZ", "Танзания"], ["TG", "Того"], ["TO", "Тонга"], ["TT", "Тринидад и Тобаго"],
+  ["TV", "Тувалу"], ["TN", "Тунис"], ["TM", "Туркменистан"], ["TR", "Турция"], ["UG", "Уганда"],
+  ["UZ", "Узбекистан"], ["UA", "Украина"], ["UY", "Уругвай"], ["FJ", "Фиджи"], ["PH", "Филиппины"],
+  ["FI", "Финляндия"], ["FR", "Франция"], ["HR", "Хорватия"], ["CF", "ЦАР"], ["TD", "Чад"],
+  ["ME", "Черногория"], ["CZ", "Чехия"], ["CL", "Чили"], ["CH", "Швейцария"], ["SE", "Швеция"],
+  ["LK", "Шри-Ланка"], ["GQ", "Экв. Гвинея"], ["EC", "Эквадор"], ["ER", "Эритрея"], ["SZ", "Эсватини"],
+  ["EE", "Эстония"], ["ET", "Эфиопия"], ["ZA", "ЮАР"], ["KR", "Южная Корея"], ["SS", "Южный Судан"],
+  ["JM", "Ямайка"], ["JP", "Япония"],
+];
+
+function flagEmoji(code) {
+  return code.split("").map((c) => String.fromCodePoint(127397 + c.charCodeAt(0))).join("");
+}
+
+function createDropdown(id, { options, value, placeholder, searchable, onChange }) {
+  const container = document.getElementById(id);
+  container.classList.add("dd");
+  container.innerHTML = `
+    <button type="button" class="dd-trigger">
+      <span class="dd-trigger-label placeholder">${esc(placeholder || "Выбери")}</span>
+      <svg class="dd-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6,9 12,15 18,9"/></svg>
+    </button>
+    <div class="dd-menu">
+      ${searchable ? '<input type="text" class="dd-search" placeholder="Поиск…">' : ""}
+      <div class="dd-list"></div>
+    </div>`;
+  const trigger = container.querySelector(".dd-trigger");
+  const label = container.querySelector(".dd-trigger-label");
+  const menu = container.querySelector(".dd-menu");
+  const list = container.querySelector(".dd-list");
+  const search = container.querySelector(".dd-search");
+
+  let current = options || [];
+  let val = value ?? null;
+  let open = false;
+  let closeTimer = null;
+
+  function renderList(filter) {
+    const f = (filter || "").trim().toLowerCase();
+    const filtered = f ? current.filter((o) => o.label.toLowerCase().includes(f)) : current;
+    list.innerHTML = filtered.length
+      ? filtered.map((o) => `<div class="dd-option${o.value === val ? " selected" : ""}" data-value="${esc(o.value)}">${o.html || esc(o.label)}</div>`).join("")
+      : '<div class="dd-empty">Ничего не найдено</div>';
+  }
+  function updateLabel() {
+    const found = current.find((o) => o.value === val);
+    label.textContent = found ? found.label : (placeholder || "Выбери");
+    label.classList.toggle("placeholder", !found);
+  }
+  function onDocClick(e) {
+    if (!container.contains(e.target)) closeMenu();
+  }
+  function openMenu() {
+    if (open) return;
+    open = true;
+    if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
+    container.classList.add("dd-open");
+    renderList("");
+    menu.classList.remove("closing");
+    requestAnimationFrame(() => menu.classList.add("show"));
+    if (search) { search.value = ""; setTimeout(() => search.focus(), 30); }
+    document.addEventListener("click", onDocClick, true);
+    document.addEventListener("keydown", onKeydown);
+  }
+  function closeMenu() {
+    if (!open) return;
+    open = false;
+    container.classList.remove("dd-open");
+    menu.classList.remove("show");
+    menu.classList.add("closing");
+    document.removeEventListener("click", onDocClick, true);
+    document.removeEventListener("keydown", onKeydown);
+    closeTimer = setTimeout(() => menu.classList.remove("closing"), 200);
+  }
+  function onKeydown(e) {
+    if (e.key === "Escape") closeMenu();
+  }
+
+  trigger.addEventListener("click", () => (open ? closeMenu() : openMenu()));
+  if (search) search.addEventListener("input", () => renderList(search.value));
+  list.addEventListener("click", (e) => {
+    const opt = e.target.closest(".dd-option");
+    if (!opt) return;
+    val = opt.dataset.value;
+    updateLabel();
+    closeMenu();
+    if (onChange) onChange(val);
+  });
+
+  updateLabel();
+
+  return {
+    setOptions(opts) { current = opts; updateLabel(); },
+    setValue(v) { val = v; updateLabel(); },
+    getValue() { return val; },
+  };
+}
+
+const DD = {};
+
+function initDropdowns() {
+  const countryOptions = COUNTRIES.map(([code, name]) => ({
+    value: code, label: `${flagEmoji(code)} ${name}`,
+  }));
+  DD.ngCountry = createDropdown("ng-country", {
+    options: countryOptions, placeholder: "Страна", searchable: true,
+    onChange: (code) => {
+      const c = COUNTRIES.find((x) => x[0] === code);
+      if (c) document.getElementById("ng-label").value = `${flagEmoji(code)} ${c[1]}`;
+    },
+  });
+  DD.nmCountry = createDropdown("nm-country", {
+    options: countryOptions, placeholder: "Страна", searchable: true,
+    onChange: (code) => {
+      const c = COUNTRIES.find((x) => x[0] === code);
+      if (c) document.getElementById("nm-label").value = `${flagEmoji(code)} ${c[1]}`;
+    },
+  });
+  DD.giftNode = createDropdown("gift-node", { options: [], placeholder: "Сервер" });
+  DD.giftPlan = createDropdown("gift-plan", { options: [], placeholder: "Срок" });
+}
+
+const ICONS = {
+  users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17.5" cy="9" r="2.4"/><path d="M21 20c0-2.6-1.8-4.8-4.2-5.5"/></svg>',
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.5 2.5L16 9.5"/></svg>',
+  box: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><line x1="12" y1="13" x2="12" y2="21"/></svg>',
+  gift: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="13" rx="1.5"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="12" y1="8" x2="12" y2="21"/></svg>',
+  up: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="6,11 12,5 18,11"/></svg>',
+  down: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="6,13 12,19 18,13"/></svg>',
+  pulse: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3,13 8,13 10,7 14,19 16,13 21,13"/></svg>',
+};
+
+function statCard(label, value, color, icon, delay) {
+  return `<div class="stat-card reveal" style="animation-delay:${delay}s">
+    <div class="l">${label}</div>
+    <div class="row" style="color:${color}">${icon}<span class="v" style="color:var(--text)">${value}</span></div>
+  </div>`;
+}
+
+async function loadTraffic() {
+  const t = await api("/admin/api/traffic");
+  const grid = document.getElementById("traffic-stat-grid");
+  grid.innerHTML = [
+    ["Входящий (всего)", t.total_up_fmt, "var(--accent)", ICONS.up],
+    ["Исходящий (всего)", t.total_down_fmt, "var(--blue)", ICONS.down],
+    ["Суммарно", t.total_fmt, "var(--accent)", ICONS.pulse],
+  ].map(([l, v, c, ic], i) => statCard(l, v, c, ic, i * 0.05)).join("");
+
+  const body = document.getElementById("traffic-body");
+  body.innerHTML = t.per_subscription.length ? t.per_subscription.map((r) => `
+    <tr><td>${esc(r.username)}</td><td>${esc(r.node_label)}</td><td>${r.up_fmt}</td><td>${r.down_fmt}</td><td>${r.total_fmt}</td></tr>
+  `).join("") : '<tr><td colspan="5"><div class="empty">Пока нет данных по трафику</div></td></tr>';
+}
+
+function fmtDate(iso) { return iso ? iso.slice(0, 10) : "—"; }
+function statusBadge(active, daysLeft) {
+  if (!active) return '<span class="badge bad">истекла</span>';
+  if (daysLeft <= 2) return '<span class="badge warn">' + daysLeft + ' дн.</span>';
+  return '<span class="badge ok">' + daysLeft + ' дн.</span>';
+}
+function staggerReveal(container) {
+  const items = container.querySelectorAll(".reveal");
+  items.forEach((el, i) => { el.style.animationDelay = (i * 0.04) + "s"; });
+}
+
+async function loadDashboard() {
+  const stats = await api("/admin/api/stats");
+  const grid = document.getElementById("stat-grid");
+  grid.innerHTML = [
+    ["Пользователей", stats.users, "var(--blue)", ICONS.users],
+    ["Активных подписок", stats.active_subscriptions, "var(--green)", ICONS.check],
+    ["Всего подписок", stats.total_subscriptions, "var(--accent)", ICONS.box],
+    ["Гифт-коды (созд./исп.)", stats.gifts_created + " / " + stats.gifts_used, "var(--pink)", ICONS.gift],
+  ].map(([l, v, c, ic], i) => statCard(l, v, c, ic, i * 0.05)).join("");
+
+  const subs = await api("/admin/api/subscriptions");
+  const body = document.getElementById("recent-subs-body");
+  const recent = subs.slice(0, 8);
+  body.innerHTML = recent.length ? recent.map((s) => `
+    <tr><td>${s.username ? "@" + esc(s.username) : "tg" + s.tg_id}</td><td>${esc(s.node_label)}</td><td>${esc(s.plan_label)}</td>
+    <td>${fmtDate(s.expires_at)}</td><td>${statusBadge(s.active, s.days_left)}</td></tr>
+  `).join("") : '<tr><td colspan="5"><div class="empty">Пока нет подписок</div></td></tr>';
+}
+
+async function loadSubscriptions() {
+  const subs = await api("/admin/api/subscriptions");
+  const body = document.getElementById("subs-body");
+  body.innerHTML = subs.length ? subs.map((s) => `
+    <tr><td>${s.username ? "@" + esc(s.username) : "tg" + s.tg_id}</td><td>${esc(s.node_label)}</td><td>${esc(s.plan_label)}</td>
+    <td>${fmtDate(s.created_at)}</td><td>${fmtDate(s.expires_at)}</td><td>${statusBadge(s.active, s.days_left)}</td>
+    <td>${s.active ? `<button class="muted-btn" onclick="revokeSub('${s.uuid}')">Отозвать</button>` : ""}</td></tr>
+  `).join("") : '<tr><td colspan="7"><div class="empty">Пока нет подписок</div></td></tr>';
+}
+
+async function revokeSub(uuid) {
+  if (!confirm("Отозвать подписку?")) return;
+  await api(`/admin/api/subscriptions/${uuid}/revoke`, { method: "POST" });
+  loadSubscriptions();
+}
+
+let plansCache = null, nodesCache = null;
+
+async function loadGifts() {
+  if (!plansCache) plansCache = await api("/admin/api/plans");
+  if (!nodesCache) nodesCache = await api("/admin/api/nodes");
+  const nodeOptions = nodesCache.filter((n) => n.enabled).map((n) => ({ value: n.code, label: n.label }));
+  const planOptions = plansCache.map((p) => ({ value: p.code, label: p.label }));
+  DD.giftNode.setOptions(nodeOptions);
+  DD.giftPlan.setOptions(planOptions);
+  if (!DD.giftNode.getValue() && nodeOptions.length) DD.giftNode.setValue(nodeOptions[0].value);
+  if (!DD.giftPlan.getValue() && planOptions.length) DD.giftPlan.setValue(planOptions[0].value);
+
+  const codes = await api("/admin/api/gift-codes");
+  const body = document.getElementById("gifts-body");
+  body.innerHTML = codes.length ? codes.map((c) => `
+    <tr><td>${esc(c.node_label)}</td><td>${esc(c.plan_label)}</td><td>${fmtDate(c.created_at)}</td>
+    <td>${c.used_by ? '<span class="badge bad">использован</span>' : '<span class="badge ok">свободен</span>'}</td>
+    <td><button class="muted-btn" onclick="copyText('${c.link}')">Скопировать</button></td></tr>
+  `).join("") : '<tr><td colspan="5"><div class="empty">Пока нет гифт-кодов</div></td></tr>';
+}
+
+async function createGift() {
+  const node = DD.giftNode.getValue();
+  const plan = DD.giftPlan.getValue();
+  const res = await api("/admin/api/gift-codes", { method: "POST", body: JSON.stringify({ node, plan }) });
+  document.getElementById("gift-result").innerHTML = `<div class="code-box" style="margin-top:12px">${res.link}<button class="copy-btn" onclick="copyText('${res.link}')">Копировать</button></div>`;
+  loadGifts();
+}
+
+function copyText(t) { navigator.clipboard.writeText(t); }
+
+async function loadNodes() {
+  const nodes = await api("/admin/api/nodes");
+  nodesCache = nodes;
+  const body = document.getElementById("nodes-body");
+  body.innerHTML = nodes.map((n) => `
+    <tr>
+      <td>${esc(n.label)}</td><td>${esc(n.address) || "—"}${n.port && n.address ? ":" + n.port : ""}</td>
+      <td>${n.kind === "local" ? "локальная" : n.kind === "managed" ? "управляемая" : "внешняя"}</td>
+      <td>${n.status === "pending" ? '<span class="badge warn">ожидает установки</span>' : (n.enabled ? '<span class="badge ok">включена</span>' : '<span class="badge bad">выключена</span>')}</td>
+      <td id="metrics-${esc(n.code)}">${n.status === "pending" ? "—" : `<button class="muted-btn" onclick="loadNodeMetrics('${esc(n.code)}')">Проверить</button>`}</td>
+      <td>
+        ${n.code !== "de1" ? `<button class="muted-btn" onclick="toggleNode('${n.code}', ${n.enabled ? 0 : 1})">${n.enabled ? "Выключить" : "Включить"}</button>` : ""}
+        ${n.code !== "de1" ? `<button class="muted-btn" onclick="deleteNode('${n.code}')">Удалить</button>` : ""}
+      </td>
+    </tr>
+  `).join("");
+}
+
+async function loadNodeMetrics(code) {
+  const cell = document.getElementById(`metrics-${code}`);
+  cell.textContent = "…";
+  try {
+    const m = await api(`/admin/api/nodes/${code}/metrics`);
+    if (!m.ok) { cell.innerHTML = '<span class="badge bad">офлайн</span>'; return; }
+    const load = m.load1 !== null && m.load1 !== undefined ? m.load1.toFixed(2) : "—";
+    cell.innerHTML = `<span style="font-family:'Fira Mono',monospace;font-size:12px">CPU ${load} · ${esc(m.mem_fmt)} · ${esc(m.uptime_fmt)}</span>`;
+  } catch (e) {
+    cell.innerHTML = '<span class="badge bad">ошибка</span>';
+  }
+}
+
+async function toggleNode(code, enabled) {
+  await api(`/admin/api/nodes/${code}`, { method: "PATCH", body: JSON.stringify({ enabled }) });
+  loadNodes();
+}
+async function deleteNode(code) {
+  if (!confirm("Удалить ноду?")) return;
+  await api(`/admin/api/nodes/${code}`, { method: "DELETE" });
+  loadNodes();
+}
+
+function switchNodeTab(tab) {
+  document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
+  document.getElementById("node-tab-guide").style.display = tab === "guide" ? "block" : "none";
+  document.getElementById("node-tab-manual").style.display = tab === "manual" ? "block" : "none";
+}
+
+let pollTimer = null;
+async function generateGuide() {
+  const label = document.getElementById("ng-label").value.trim();
+  const address = document.getElementById("ng-address").value.trim();
+  const port = parseInt(document.getElementById("ng-port").value || "443");
+  const sni = document.getElementById("ng-sni").value.trim();
+  const include_ws = document.getElementById("ng-ws").checked;
+  const include_hysteria2 = document.getElementById("ng-hy").checked;
+  const hysteria_port = parseInt(document.getElementById("ng-hy-port").value || "443");
+  if (!label || !address) return;
+  const res = await api("/admin/api/nodes/provision-guide", { method: "POST", body: JSON.stringify({ label, address, port, sni, include_ws, include_hysteria2, hysteria_port }) });
+  document.getElementById("guide-result").innerHTML = `
+    <p class="page-sub" style="margin:16px 0 8px">Выполни на новом сервере:</p>
+    <div class="code-box">${res.command}<button class="copy-btn" onclick="copyText('${res.command}')">Копировать</button></div>
+    <p class="page-sub" style="margin-top:12px" id="guide-status">Ожидаю установки…</p>
+  `;
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    const st = await api(`/admin/api/nodes/${res.code}/status`);
+    if (st.status === "active") {
+      clearInterval(pollTimer);
+      document.getElementById("guide-status").innerHTML = '<span class="badge ok">Установлено и подключено</span>';
+      loadNodes();
+    }
+  }, 4000);
+}
+
+async function createManualNode() {
+  const body = {
+    label: document.getElementById("nm-label").value.trim(),
+    code: document.getElementById("nm-code").value.trim(),
+    address: document.getElementById("nm-address").value.trim(),
+    port: parseInt(document.getElementById("nm-port").value || "443"),
+    public_key: document.getElementById("nm-pbk").value.trim(),
+    short_id: document.getElementById("nm-sid").value.trim(),
+    sni: document.getElementById("nm-sni").value.trim(),
+    shared_uuid: document.getElementById("nm-uuid").value.trim() || null,
+    kind: document.getElementById("nm-uuid").value.trim() ? "external" : "managed",
+  };
+  await api("/admin/api/nodes", { method: "POST", body: JSON.stringify(body) });
+  document.getElementById("manual-result").innerHTML = '<p class="page-sub" style="margin-top:12px">Нода добавлена.</p>';
+  loadNodes();
+}
+
+(async function init() {
+  initDropdowns();
+  try {
+    const me = await api("/admin/api/me");
+    if (me.authenticated) showApp(); else showLogin();
+  } catch (e) {
+    showLogin();
+  }
+})();
+</script>
+</body>
+</html>

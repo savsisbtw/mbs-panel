@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Личный кабинет — MBS Panel</title>
+<style>
+  :root {
+    --bg: #0a0b0f; --card: #131519; --border: #1e2128;
+    --text: #eceef2; --muted: #868c99; --accent: #7c6cf0;
+    --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+  }
+  .card {
+    max-width: 420px; width: 100%; background: var(--card); border: 1px solid var(--border);
+    border-radius: 16px; padding: 32px 28px;
+    opacity: 0; transform: translateY(10px); filter: blur(6px);
+    animation: enter 0.6s var(--ease) forwards;
+  }
+  @keyframes enter { to { opacity: 1; transform: translateY(0); filter: blur(0); } }
+  h1 { font-size: 17px; margin: 0 0 20px; font-weight: 600; letter-spacing: -0.01em; }
+  .row { display: flex; gap: 8px; margin-bottom: 4px; }
+  input {
+    flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 11px 13px; color: var(--text); font-size: 14px;
+    transition: border-color 0.2s var(--ease);
+  }
+  input:focus { outline: none; border-color: var(--accent); }
+  .btn {
+    padding: 11px 16px; border-radius: 8px; border: none; cursor: pointer;
+    background: var(--text); color: var(--bg); font-weight: 600; font-size: 14px;
+    transition: transform 0.15s var(--ease), opacity 0.15s var(--ease);
+  }
+  .btn:hover { opacity: 0.85; }
+  .btn:active { transform: scale(0.96); }
+
+  .sub-item {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+    padding: 13px 15px; margin-top: 12px; font-size: 14px;
+    opacity: 0; transform: translateY(8px);
+    animation: enter 0.5s var(--ease) forwards;
+  }
+  .sub-item .top { display: flex; justify-content: space-between; margin-bottom: 4px; }
+  .sub-item .days { color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .linkbox {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+    font-size: 12px; word-break: break-all; color: var(--muted); margin-top: 16px;
+    opacity: 0; animation: fadeIn 0.5s var(--ease) 0.15s forwards;
+  }
+  @keyframes fadeIn { to { opacity: 1; } }
+  .hint { text-align: center; color: var(--muted); font-size: 13px; margin-top: 18px; margin-bottom: 0; }
+  a.tglink { color: var(--accent); text-decoration: none; }
+  a.tglink:hover { text-decoration: underline; }
+  #err { color: #e5686b; font-size: 13px; margin-top: 8px; min-height: 0; }
+  .qr-box {
+    display: flex; justify-content: center; margin-top: 16px;
+    opacity: 0; animation: fadeIn 0.5s var(--ease) 0.2s forwards;
+  }
+  .qr-box img, .qr-box canvas { border-radius: 8px; background: #fff; padding: 6px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+    .card, .sub-item, .linkbox, .qr-box { opacity: 1 !important; transform: none !important; filter: none !important; }
+  }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+</head>
+<body>
+  <div class="card">
+    <h1>Личный кабинет</h1>
+    <div class="row">
+      <input id="tokenInput" placeholder="вставь свой токен" autocomplete="off">
+      <button class="btn" onclick="load()">Войти</button>
+    </div>
+    <div id="err"></div>
+    <div id="content"></div>
+    <p class="hint">Токен выдаёт бот <a class="tglink" href="https://t.me/YourBot_robot" target="_blank">@YourBot_robot</a> — «Моя подписка»</p>
+  </div>
+
+<script>
+const API = "https://sub.example.com";
+
+function esc(s) {
+  if (s === null || s === undefined) return "";
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function fillFromUrl() {
+  const params = new URLSearchParams(location.search);
+  const t = params.get("token");
+  if (t) { document.getElementById("tokenInput").value = t; load(); }
+}
+
+async function load() {
+  const token = document.getElementById("tokenInput").value.trim();
+  const err = document.getElementById("err");
+  const content = document.getElementById("content");
+  err.textContent = ""; content.innerHTML = "";
+  if (!token) return;
+  try {
+    const res = await fetch(`${API}/api/cabinet/${encodeURIComponent(token)}`);
+    if (!res.ok) { err.textContent = "Токен не найден"; return; }
+    const data = await res.json();
+    history.replaceState(null, "", `?token=${encodeURIComponent(token)}`);
+    let html = "";
+    if (data.subscriptions.length === 0) {
+      html += `<p class="muted" style="margin-top:14px">Активных подписок нет</p>`;
+    } else {
+      data.subscriptions.forEach((s, i) => {
+        html += `<div class="sub-item" style="animation-delay:${i * 0.06}s"><div class="top"><span>${esc(s.node)}</span><span class="days">${s.days_left} дн.</span></div><div class="muted">${esc(s.plan_label)}, до ${s.expires_at.slice(0,10)}</div></div>`;
+      });
+    }
+    html += `<div class="qr-box" id="qr"></div>`;
+    html += `<div class="linkbox">${esc(data.sub_link)}</div>`;
+    content.innerHTML = html;
+    if (data.sub_link) {
+      new QRCode(document.getElementById("qr"), {
+        text: data.sub_link, width: 150, height: 150,
+        colorDark: "#0a0b0f", colorLight: "#ffffff", correctLevel: QRCode.CorrectLevel.M,
+      });
+    }
+  } catch (e) {
+    err.textContent = "Ошибка соединения";
+  }
+}
+
+fillFromUrl();
+</script>
+</body>
+</html>
