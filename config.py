@@ -27,7 +27,14 @@ def env(key, default=None, required=False):
 BOT_TOKEN = env("BOT_TOKEN", required=True)
 BOT_USERNAME = env("BOT_USERNAME", required=True)
 ADMIN_IDS = {int(x) for x in env("ADMIN_IDS", "").split(",") if x.strip()}
+
 ADMIN_PANEL_PASSWORD = env("ADMIN_PANEL_PASSWORD", required=True)
+if ADMIN_PANEL_PASSWORD in ("change-me", "changeme", "admin", "password") or len(ADMIN_PANEL_PASSWORD) < 8:
+    raise RuntimeError(
+        "ADMIN_PANEL_PASSWORD в .env слишком слабый или дефолтный — поставь случайный пароль "
+        "(например: mbs pass)"
+    )
+
 PANEL_DOMAIN = env("PANEL_DOMAIN", required=True)
 SUB_DOMAIN = env("SUB_DOMAIN", required=True)
 SITE_DOMAIN = env("SITE_DOMAIN", required=True)
