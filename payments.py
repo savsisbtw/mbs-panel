@@ -34,6 +34,12 @@ def _post_json(url: str, body: dict, headers: dict, timeout: int = 15) -> dict:
         return json.loads(resp.read().decode())
 
 
+def _get_json(url: str, headers: dict, timeout: int = 15) -> dict:
+    req = urllib.request.Request(url, method="GET", headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode())
+
+
 def create_yookassa_payment(payment_id: str, amount_rub: int, description: str) -> str:
     auth = base64.b64encode(f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}".encode()).decode()
     data = _post_json(
@@ -58,6 +64,15 @@ def create_yookassa_payment(payment_id: str, amount_rub: int, description: str) 
 
 def verify_yookassa_notification(body: dict) -> bool:
     return body.get("event") == "payment.succeeded" and "object" in body
+
+
+def check_yookassa_payment(external_id: str) -> str:
+    auth = base64.b64encode(f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}".encode()).decode()
+    data = _get_json(
+        f"https://api.yookassa.ru/v3/payments/{external_id}",
+        {"Authorization": f"Basic {auth}"},
+    )
+    return data.get("status", "")
 
 
 def create_platega_payment(payment_id: str, amount_rub: int, description: str) -> str:
@@ -88,9 +103,29 @@ def verify_platega_signature(raw_body: bytes, signature: str) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
+def check_platega_payment(external_id: str) -> str:
+    data = _get_json(
+        f"https://app.platega.io/transaction/{external_id}",
+        {"X-MerchantId": PLATEGA_MERCHANT_ID, "X-Secret": PLATEGA_SECRET},
+    )
+    return data.get("status", "")
+
+
+PAID_STATUSES = {"succeeded", "CONFIRMED"}
+FAILED_STATUSES = {"canceled", "CANCELED", "CHARGEBACKED"}
+
+
 def create_payment_link(provider: str, payment_id: str, amount_rub: int, description: str):
     if provider == "yookassa":
         return create_yookassa_payment(payment_id, amount_rub, description)
     if provider == "platega":
         return create_platega_payment(payment_id, amount_rub, description)
+    raise ValueError(f"unknown provider: {provider}")
+
+
+def check_payment_status(provider: str, external_id: str) -> str:
+    if provider == "yookassa":
+        return check_yookassa_payment(external_id)
+    if provider == "platega":
+        return check_platega_payment(external_id)
     raise ValueError(f"unknown provider: {provider}")

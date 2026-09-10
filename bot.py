@@ -319,12 +319,51 @@ async def cb_admin_sync(cb: CallbackQuery):
     await cb.answer()
 
 
+async def reconcile_pending_payments():
+    if not PAYMENTS_ENABLED:
+        return
+    for payment in db.list_payments():
+        if payment["status"] != "pending" or not payment.get("external_id"):
+            continue
+        try:
+            status = payments.check_payment_status(payment["provider"], payment["external_id"])
+        except Exception:
+            continue
+        if status in payments.PAID_STATUSES:
+            granted = db.mark_payment_paid(payment["id"])
+            if not granted:
+                continue
+            plan = PLANS_BY_CODE.get(payment["plan"])
+            node_row = db.get_node(payment["node"])
+            if not plan or not node_row:
+                continue
+            sub = db.create_subscription(payment["tg_id"], payment["node"], plan["days"], payment["plan"], source="payment")
+            xray_manager.add_client_to_node(node_row, sub["uuid"], email=sub["uuid"])
+            user = db.get_or_create_user(payment["tg_id"], None)
+            try:
+                await bot.send_message(
+                    payment["tg_id"],
+                    f"<b>Оплата получена</b>\n\n"
+                    f"Сервер: {node_row['label']}\n"
+                    f"Срок: {plan['label']} — до {sub['expires_at'][:10]}\n\n"
+                    f"Ссылка-подписка:\n{sub_url_for(user['token'])}",
+                )
+            except Exception:
+                log.exception("failed to notify user about payment")
+        elif status in payments.FAILED_STATUSES:
+            db.mark_payment_failed(payment["id"])
+
+
 async def periodic_sync():
     while True:
         try:
             xray_manager.sync_all()
         except Exception:
             log.exception("periodic sync failed")
+        try:
+            await reconcile_pending_payments()
+        except Exception:
+            log.exception("payment reconciliation failed")
         await asyncio.sleep(90)
 
 

@@ -109,6 +109,8 @@ SUB_PAGE_TEMPLATE = """<!doctype html>
   }}
   @keyframes fadeIn {{ to {{ opacity: 1; }} }}
   .thanks {{ font-size: 13px; color: var(--muted); line-height: 1.5; }}
+  .thanks a {{ color: var(--accent); text-decoration: none; }}
+  .thanks a:hover {{ text-decoration: underline; }}
   .qr-box {{
     display: flex; justify-content: center; margin-bottom: 22px;
     opacity: 0; animation: fadeIn 0.5s var(--ease) 0.3s forwards;
@@ -130,7 +132,7 @@ SUB_PAGE_TEMPLATE = """<!doctype html>
     <a class="btn secondary" href="{sub_url}">Открыть ссылку подписки</a>
     <div class="qr-box" id="qr"></div>
     <div class="link-box">{sub_url}</div>
-    <div class="thanks">Спасибо, что пользуетесь MBS Panel.<br>Если Happ не установлен — скачай его в App Store или Google Play.</div>
+    <div class="thanks">Спасибо, что пользуетесь MBS Panel.<br>Нет Happ? Скачай: <a href="https://apps.apple.com/us/app/happ-proxy-utility/id6504287215" target="_blank">App Store</a> · <a href="https://play.google.com/store/apps/details?id=com.happproxy" target="_blank">Google Play</a></div>
   </div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <script>
@@ -301,6 +303,50 @@ def _grant_paid_subscription(payment_id: str):
         f"Срок: {plan['label']} — до {sub['expires_at'][:10]}\n\n"
         f"Ссылка-подписка:\nhttps://{SUB_DOMAIN}/sub/{user['token']}",
     )
+
+
+def _check_and_reconcile_payment(payment: dict) -> str:
+    if not payment.get("external_id"):
+        return payment["status"]
+    try:
+        status = payments.check_payment_status(payment["provider"], payment["external_id"])
+    except Exception:
+        return payment["status"]
+    if status in payments.PAID_STATUSES:
+        _grant_paid_subscription(payment["id"])
+        return "paid"
+    if status in payments.FAILED_STATUSES:
+        db.mark_payment_failed(payment["id"])
+        return "failed"
+    return payment["status"]
+
+
+@app.get("/admin/api/payments")
+def admin_list_payments(request: Request):
+    require_admin(request)
+    out = []
+    for p in db.list_payments():
+        node = db.get_node(p["node"])
+        plan = PLANS_BY_CODE.get(p["plan"])
+        out.append({
+            **p,
+            "node_label": node["label"] if node else p["node"],
+            "plan_label": plan["label"] if plan else p["plan"],
+            "provider_label": payments.PROVIDER_NAMES.get(p["provider"], p["provider"]),
+        })
+    return out
+
+
+@app.post("/admin/api/payments/{payment_id}/check")
+def admin_check_payment(payment_id: str, request: Request):
+    require_admin(request)
+    payment = db.get_payment(payment_id)
+    if not payment:
+        raise HTTPException(404, "not found")
+    if payment["status"] != "pending":
+        return {"status": payment["status"]}
+    status = _check_and_reconcile_payment(payment)
+    return {"status": status}
 
 
 @app.post("/payments/webhook/yookassa")

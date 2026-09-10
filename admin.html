@@ -104,6 +104,7 @@
   .nav-item.active { background: var(--accent-dim); color: var(--accent); }
   .nav-item.active svg { opacity: 1; }
   .sidebar-footer { margin-top: auto; padding: 10px 0 0; }
+  .version-tag { text-align: center; font-size: 11px; color: var(--muted2); margin-top: 10px; font-family: "Fira Mono", ui-monospace, monospace; }
 
   .main { padding: 30px 40px; max-width: 1120px; }
   .page-title { font-size: 20px; font-weight: 600; margin: 0 0 4px; letter-spacing: -0.01em; }
@@ -281,8 +282,10 @@
     <div class="nav-item" data-view="gifts" onclick="showView('gifts')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="13" rx="1.5"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="12" y1="8" x2="12" y2="21"/><path d="M12 8c-1.2 0-2.3-1.3-2.3-2.6C9.7 4 10.6 3 11.6 3c1.4 0 2.4 2 .4 5"/><path d="M12 8c1.2 0 2.3-1.3 2.3-2.6C14.3 4 13.4 3 12.4 3c-1.4 0-2.4 2-.4 5"/></svg>Гифт-коды</div>
     <div class="nav-item" data-view="nodes" onclick="showView('nodes')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><line x1="7" y1="7" x2="7.01" y2="7"/><line x1="7" y1="17" x2="7.01" y2="17"/></svg>Ноды</div>
     <div class="nav-item" data-view="traffic" onclick="showView('traffic')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3,13 8,13 10,7 14,19 16,13 21,13"/></svg>Трафик</div>
+    <div class="nav-item" data-view="payments" onclick="showView('payments')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>Платежи</div>
     <div class="sidebar-footer">
       <button class="btn ghost" style="width:100%" onclick="logout()">Выйти</button>
+      <div class="version-tag">MBS Panel v1.0.0 · <a href="https://github.com/devsavsis/mbs-panel/releases/latest" target="_blank" style="color:inherit">обновления</a></div>
     </div>
   </div>
 
@@ -468,6 +471,14 @@
         </tr></thead><tbody id="traffic-body"></tbody></table></div>
       </div>
     </div>
+
+    <div id="view-payments" class="view">
+      <div class="page-title">Платежи</div>
+      <div class="page-sub">ЮKassa / Platega — история и статус, с проверкой на стороне провайдера при пропущенном вебхуке</div>
+      <div class="table-wrap"><table><thead><tr>
+        <th>Пользователь</th><th>Сервер</th><th>Тариф</th><th>Провайдер</th><th>Сумма</th><th>Создан</th><th>Статус</th><th></th>
+      </tr></thead><tbody id="payments-body"></tbody></table></div>
+    </div>
   </div>
 </div>
 
@@ -520,6 +531,7 @@ function showView(name) {
   if (name === "gifts") loadGifts();
   if (name === "nodes") loadNodes();
   if (name === "traffic") loadTraffic();
+  if (name === "payments") loadPayments();
 }
 
 const COUNTRIES = [
@@ -733,6 +745,35 @@ async function resetTraffic(uuid, btn) {
   } catch (e) {
     btn.disabled = false;
     btn.textContent = "Сбросить";
+  }
+}
+
+function paymentStatusBadge(status) {
+  if (status === "paid") return '<span class="badge ok">оплачен</span>';
+  if (status === "failed") return '<span class="badge bad">не прошёл</span>';
+  return '<span class="badge warn">ожидание</span>';
+}
+
+async function loadPayments() {
+  const rows = await api("/admin/api/payments");
+  const body = document.getElementById("payments-body");
+  body.innerHTML = rows.length ? rows.map((p, i) => `
+    <tr ${rowAttr(i)}>
+      <td>tg${p.tg_id}</td><td>${esc(p.node_label)}</td><td>${esc(p.plan_label)}</td>
+      <td>${esc(p.provider_label)}</td><td>${p.amount} ₽</td><td>${fmtDate(p.created_at)}</td>
+      <td>${paymentStatusBadge(p.status)}</td>
+      <td>${p.status === "pending" ? `<button class="muted-btn" onclick="checkPayment('${p.id}', this)">Проверить</button>` : ""}</td>
+    </tr>
+  `).join("") : '<tr><td colspan="8"><div class="empty">Пока нет платежей</div></td></tr>';
+}
+
+async function checkPayment(id, btn) {
+  btn.disabled = true;
+  btn.textContent = "…";
+  try {
+    await api(`/admin/api/payments/${id}/check`, { method: "POST" });
+  } finally {
+    loadPayments();
   }
 }
 
