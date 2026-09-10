@@ -13,6 +13,7 @@ mbs — управление MBS Panel
   mbs restart               перезапустить bot + api
   mbs logs [bot|api|xray]   последние строки лога (по умолчанию api)
   mbs domain                показать текущий домен панели
+  mbs update                обновить код с GitHub и перезапустить (не трогает .env и базу)
 EOF
 }
 
@@ -53,11 +54,53 @@ cmd_domain() {
   grep "^PANEL_DOMAIN=" "$ENV_FILE"
 }
 
+cmd_update() {
+  cd "$APP_DIR"
+  echo "проверяю обновления..."
+  git fetch --quiet origin main
+  local before after
+  before=$(git rev-parse HEAD)
+  after=$(git rev-parse origin/main)
+  if [ "$before" = "$after" ]; then
+    echo "уже последняя версия ($before)."
+    return 0
+  fi
+  echo "текущая: $before"
+  echo "новая:   $after"
+  if ! git merge --ff-only origin/main --quiet; then
+    echo "не вышло быстро обновиться (похоже, файлы правились вручную на сервере) — разберись руками: git status"
+    return 1
+  fi
+  echo "обновляю зависимости..."
+  venv/bin/pip install --quiet -r requirements.txt
+  echo "проверяю код..."
+  if ! venv/bin/python -m py_compile *.py; then
+    echo "новый код не проходит проверку, откатываюсь на $before..."
+    git reset --hard "$before" --quiet
+    venv/bin/pip install --quiet -r requirements.txt
+    return 1
+  fi
+  echo "перезапускаю..."
+  systemctl restart mbs-bot mbs-api
+  sleep 2
+  if systemctl is-active --quiet mbs-bot && systemctl is-active --quiet mbs-api; then
+    echo "обновлено: $before -> $(git rev-parse --short HEAD)"
+  else
+    echo "сервисы не поднялись после обновления, откатываюсь на $before..."
+    git reset --hard "$before" --quiet
+    venv/bin/pip install --quiet -r requirements.txt
+    systemctl restart mbs-bot mbs-api
+    echo "откачено обратно на $before"
+    return 1
+  fi
+}
+
 case "$1" in
   pass) cmd_pass "$2" ;;
   status) cmd_status ;;
   restart) cmd_restart ;;
   logs) cmd_logs "$2" ;;
   domain) cmd_domain ;;
+  update) cmd_update ;;
   *) usage ;;
 esac
