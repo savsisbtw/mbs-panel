@@ -40,7 +40,7 @@
 Нужен чистый сервер на **Ubuntu 22.04/24.04** или **Debian 11/12**, root-доступ и три поднятых DNS A-записи (см. таблицу ниже).
 
 ```bash
-git clone https://github.com/ImSavsis/mbs-panel.git && cd mbs-panel && sudo bash install.sh
+git clone https://github.com/devsavsis/mbs-panel.git && cd mbs-panel && sudo bash install.sh
 ```
 
 Скрипт спросит домен панели, домен подписки, токен бота от [@BotFather](https://t.me/BotFather) и список Telegram ID админов — и дальше всё сам: ставит зависимости, Xray, nginx, выпускает сертификаты Let's Encrypt, генерирует Reality-ключи, поднимает systemd-сервисы, настраивает firewall (ufw) и fail2ban. В конце покажет пароль от админки и ссылку на панель.

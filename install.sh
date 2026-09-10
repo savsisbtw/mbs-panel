@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-REPO_URL="https://github.com/ImSavsis/mbs-panel.git"
+REPO_URL="https://github.com/devsavsis/mbs-panel.git"
 APP_DIR="/opt/mbs-panel"
 WEBROOT="/var/www/certbot"
 
