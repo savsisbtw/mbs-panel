@@ -444,7 +444,10 @@ def admin_create_node(request: Request, body: dict = Body(...)):
 @app.patch("/admin/api/nodes/{code}")
 def admin_update_node(code: str, request: Request, body: dict = Body(...)):
     require_admin(request)
-    allowed = {k: v for k, v in body.items() if k in {"label", "enabled", "address", "port", "sni"}}
+    editable = {"label", "enabled", "address", "port", "sni", "public_key", "short_id", "flow", "shared_uuid"}
+    if code == "de1":
+        editable = {"label"}
+    allowed = {k: v for k, v in body.items() if k in editable}
     return db.update_node(code, **allowed)
 
 

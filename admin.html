@@ -217,9 +217,29 @@
 
   .empty { text-align: center; color: var(--muted); padding: 40px 0; font-size: 13px; }
 
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(1,4,9,0.6); backdrop-filter: blur(2px);
+    display: flex; align-items: center; justify-content: center; padding: 24px; z-index: 100;
+    opacity: 0; pointer-events: none; transition: opacity 0.18s var(--ease);
+  }
+  .modal-overlay.show { opacity: 1; pointer-events: auto; }
+  .modal-card {
+    width: 100%; max-width: 480px; max-height: 88vh; overflow-y: auto;
+    background: #161b22; border: 1px solid var(--border-strong); border-radius: 14px; padding: 22px;
+    box-shadow: 0 24px 64px rgba(0,0,0,0.5);
+    opacity: 0; transform: translateY(10px) scale(0.98); filter: blur(4px);
+    transition: opacity 0.2s var(--ease), transform 0.2s var(--ease), filter 0.2s var(--ease);
+  }
+  .modal-overlay.show .modal-card { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+  .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+  .modal-head h2 { font-size: 16px; margin: 0; font-weight: 600; }
+  .modal-close { background: none; border: none; color: var(--muted); font-size: 22px; line-height: 1; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
+  .modal-close:hover { color: var(--text); background: var(--card2-tint); }
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
+
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
-    .reveal, .login-card, .splash-mark, .splash-title, .splash-tagline { opacity: 1 !important; transform: none !important; filter: none !important; }
+    .reveal, .login-card, .splash-mark, .splash-title, .splash-tagline, .modal-overlay, .modal-card { opacity: 1 !important; transform: none !important; filter: none !important; }
   }
 </style>
 </head>
@@ -351,6 +371,43 @@
           <button class="btn" onclick="createManualNode()">Добавить ноду</button>
           <div id="manual-result"></div>
         </div>
+      </div>
+    </div>
+
+    <div id="edit-node-overlay" class="modal-overlay" onclick="if(event.target===this) closeEditNode()">
+      <div class="modal-card">
+        <div class="modal-head">
+          <h2 id="edit-node-title">Редактировать ноду</h2>
+          <button class="modal-close" onclick="closeEditNode()">&times;</button>
+        </div>
+        <div class="form-row">
+          <div><label class="f">Страна</label><div id="edit-country" class="dd"></div></div>
+          <div><label class="f">Название</label><input type="text" id="edit-label"></div>
+        </div>
+        <div id="edit-node-advanced">
+          <div class="form-row">
+            <div><label class="f">Адрес</label><input type="text" id="edit-address"></div>
+            <div><label class="f">Порт</label><input type="text" id="edit-port"></div>
+          </div>
+          <div class="form-row">
+            <div><label class="f">SNI</label><input type="text" id="edit-sni"></div>
+            <div><label class="f">Flow</label><input type="text" id="edit-flow"></div>
+          </div>
+          <div class="form-row">
+            <div><label class="f">Public key</label><input type="text" id="edit-pbk"></div>
+            <div><label class="f">Short ID</label><input type="text" id="edit-sid"></div>
+          </div>
+          <div class="form-row">
+            <div><label class="f">Shared UUID</label><input type="text" id="edit-uuid" placeholder="необязательно"></div>
+          </div>
+          <p class="check-hint" style="margin:2px 0 4px">Смена адреса/ключей/short ID сломает уже выданные ссылки у текущих подписчиков этой ноды — используй только если точно понимаешь, что делаешь.</p>
+        </div>
+        <p id="edit-node-de1-note" class="page-sub" style="display:none;margin:0 0 4px">У локальной ноды (de1) параметры подключения берутся из .env на сервере — здесь можно поменять только отображаемое название.</p>
+        <div class="modal-actions">
+          <button class="btn ghost" onclick="closeEditNode()">Отмена</button>
+          <button class="btn" onclick="saveEditNode()">Сохранить</button>
+        </div>
+        <div id="edit-node-err"></div>
       </div>
     </div>
 
@@ -572,6 +629,13 @@ function initDropdowns() {
   });
   DD.giftNode = createDropdown("gift-node", { options: [], placeholder: "Сервер" });
   DD.giftPlan = createDropdown("gift-plan", { options: [], placeholder: "Срок" });
+  DD.editCountry = createDropdown("edit-country", {
+    options: countryOptions, placeholder: "Страна", searchable: true,
+    onChange: (code) => {
+      const c = COUNTRIES.find((x) => x[0] === code);
+      if (c) document.getElementById("edit-label").value = `${flagEmoji(code)} ${c[1]}`;
+    },
+  });
 }
 
 const ICONS = {
@@ -694,6 +758,7 @@ async function loadNodes() {
       <td>${n.status === "pending" ? '<span class="badge warn">ожидает установки</span>' : (n.enabled ? '<span class="badge ok">включена</span>' : '<span class="badge bad">выключена</span>')}</td>
       <td id="metrics-${esc(n.code)}">${n.status === "pending" ? "—" : `<button class="muted-btn" onclick="loadNodeMetrics('${esc(n.code)}')">Проверить</button>`}</td>
       <td>
+        <button class="muted-btn" onclick="openEditNode('${n.code}')">Редактировать</button>
         ${n.code !== "de1" ? `<button class="muted-btn" onclick="toggleNode('${n.code}', ${n.enabled ? 0 : 1})">${n.enabled ? "Выключить" : "Включить"}</button>` : ""}
         ${n.code !== "de1" ? `<button class="muted-btn" onclick="deleteNode('${n.code}')">Удалить</button>` : ""}
       </td>
@@ -711,6 +776,52 @@ async function loadNodeMetrics(code) {
     cell.innerHTML = `<span style="font-family:'Fira Mono',monospace;font-size:12px">CPU ${load} · ${esc(m.mem_fmt)} · ${esc(m.uptime_fmt)}</span>`;
   } catch (e) {
     cell.innerHTML = '<span class="badge bad">ошибка</span>';
+  }
+}
+
+let editingNodeCode = null;
+function openEditNode(code) {
+  const n = nodesCache.find((x) => x.code === code);
+  if (!n) return;
+  editingNodeCode = code;
+  const isDe1 = code === "de1";
+  document.getElementById("edit-node-title").textContent = `Редактировать: ${n.label}`;
+  document.getElementById("edit-label").value = n.label || "";
+  DD.editCountry.setValue(null);
+  document.getElementById("edit-node-advanced").style.display = isDe1 ? "none" : "block";
+  document.getElementById("edit-node-de1-note").style.display = isDe1 ? "block" : "none";
+  document.getElementById("edit-address").value = n.address || "";
+  document.getElementById("edit-port").value = n.port || 443;
+  document.getElementById("edit-sni").value = n.sni || "";
+  document.getElementById("edit-flow").value = n.flow || "";
+  document.getElementById("edit-pbk").value = n.public_key || "";
+  document.getElementById("edit-sid").value = n.short_id || "";
+  document.getElementById("edit-uuid").value = n.shared_uuid || "";
+  document.getElementById("edit-node-err").textContent = "";
+  document.getElementById("edit-node-overlay").classList.add("show");
+}
+function closeEditNode() {
+  document.getElementById("edit-node-overlay").classList.remove("show");
+}
+async function saveEditNode() {
+  const code = editingNodeCode;
+  if (!code) return;
+  const body = { label: document.getElementById("edit-label").value.trim() };
+  if (code !== "de1") {
+    body.address = document.getElementById("edit-address").value.trim();
+    body.port = parseInt(document.getElementById("edit-port").value || "443");
+    body.sni = document.getElementById("edit-sni").value.trim();
+    body.flow = document.getElementById("edit-flow").value.trim();
+    body.public_key = document.getElementById("edit-pbk").value.trim();
+    body.short_id = document.getElementById("edit-sid").value.trim();
+    body.shared_uuid = document.getElementById("edit-uuid").value.trim() || null;
+  }
+  try {
+    await api(`/admin/api/nodes/${code}`, { method: "PATCH", body: JSON.stringify(body) });
+    closeEditNode();
+    loadNodes();
+  } catch (e) {
+    document.getElementById("edit-node-err").innerHTML = '<p class="page-sub" style="color:var(--red);margin-top:8px">Не удалось сохранить</p>';
   }
 }
 
