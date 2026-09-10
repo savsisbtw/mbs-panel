@@ -1,0 +1,14 @@
+[Unit]
+Description=MBS Panel — API + admin panel
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/mbs-panel
+ExecStart=/opt/mbs-panel/venv/bin/uvicorn api:app --host 127.0.0.1 --port 8001
+Restart=on-failure
+RestartSec=3
+User=root
+
+[Install]
+WantedBy=multi-user.target

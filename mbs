@@ -1,0 +1,63 @@
+#!/bin/bash
+set -e
+
+APP_DIR="/opt/mbs-panel"
+ENV_FILE="$APP_DIR/.env"
+
+usage() {
+  cat << 'EOF'
+mbs — управление MBS Panel
+
+  mbs pass [новый_пароль]   сменить пароль админ-панели (без аргумента — сгенерировать случайный)
+  mbs status                статус всех сервисов (bot, api, xray, nginx)
+  mbs restart               перезапустить bot + api
+  mbs logs [bot|api|xray]   последние строки лога (по умолчанию api)
+  mbs domain                показать текущий домен панели
+EOF
+}
+
+cmd_pass() {
+  local new_pass="$1"
+  if [ -z "$new_pass" ]; then
+    new_pass=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 14)
+  fi
+  if grep -q "^ADMIN_PANEL_PASSWORD=" "$ENV_FILE"; then
+    sed -i "s#^ADMIN_PANEL_PASSWORD=.*#ADMIN_PANEL_PASSWORD=$new_pass#" "$ENV_FILE"
+  else
+    echo "ADMIN_PANEL_PASSWORD=$new_pass" >> "$ENV_FILE"
+  fi
+  systemctl restart mbs-api
+  echo "Новый пароль панели: $new_pass"
+}
+
+cmd_status() {
+  systemctl --no-pager status mbs-bot mbs-api xray nginx 2>&1 | grep -E "●|Active:"
+}
+
+cmd_restart() {
+  systemctl restart mbs-bot mbs-api
+  echo "Перезапущено."
+}
+
+cmd_logs() {
+  local svc="${1:-api}"
+  case "$svc" in
+    bot) journalctl -u mbs-bot -n 60 --no-pager ;;
+    api) journalctl -u mbs-api -n 60 --no-pager ;;
+    xray) journalctl -u xray -n 60 --no-pager ;;
+    *) echo "неизвестный сервис: $svc (bot|api|xray)"; exit 1 ;;
+  esac
+}
+
+cmd_domain() {
+  grep "^PANEL_DOMAIN=" "$ENV_FILE"
+}
+
+case "$1" in
+  pass) cmd_pass "$2" ;;
+  status) cmd_status ;;
+  restart) cmd_restart ;;
+  logs) cmd_logs "$2" ;;
+  domain) cmd_domain ;;
+  *) usage ;;
+esac

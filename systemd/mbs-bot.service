@@ -1,0 +1,14 @@
+[Unit]
+Description=MBS Panel — Telegram bot
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/mbs-panel
+ExecStart=/opt/mbs-panel/venv/bin/python bot.py
+Restart=on-failure
+RestartSec=3
+User=root
+
+[Install]
+WantedBy=multi-user.target
