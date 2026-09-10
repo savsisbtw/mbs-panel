@@ -65,6 +65,8 @@ git clone https://github.com/ImSavsis/mbs-panel.git && cd mbs-panel && sudo bash
 - Смени пароль в любой момент: `mbs pass новый_пароль` (без аргумента — сгенерит случайный).
 - В боте у себя (Telegram ID из ADMIN_IDS) появится админ-меню.
 
+В конце установки `install.sh` шлёт один пинг на `stats.api.savsis.xyz` (только название ОС) — просто счётчик "сколько раз панель установили", никаких доменов/токенов/паролей туда не уходит, IP не сохраняется. Отключить: `MBS_SKIP_STATS=1 sudo bash install.sh`.
+
 ## CLI `mbs`
 
 Ставится автоматически в `/usr/local/bin/mbs`.

@@ -366,6 +366,12 @@ systemctl enable --now mbs-bot
 systemctl enable --now mbs-api
 
 sleep 2
+
+if [ -z "$MBS_SKIP_STATS" ]; then
+  curl -s -m 5 -X POST https://stats.api.savsis.xyz/install \
+    -H "Content-Type: application/json" -d "{\"os\":\"$ID\"}" > /dev/null 2>&1 || true
+fi
+
 echo
 echo "== готово =="
 echo "Панель:    https://$PANEL_DOMAIN"
