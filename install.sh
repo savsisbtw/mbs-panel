@@ -1,9 +1,23 @@
 #!/bin/bash
 set -e
+set -o pipefail
 
 REPO_URL="https://github.com/devsavsis/mbs-panel.git"
 APP_DIR="/opt/mbs-panel"
 WEBROOT="/var/www/certbot"
+
+retry() {
+  local n=1 max=3 delay=5
+  until "$@"; do
+    if [ "$n" -ge "$max" ]; then
+      echo "команда не прошла после $max попыток: $*"
+      return 1
+    fi
+    echo "попытка $n не прошла, повтор через ${delay}с..."
+    n=$((n + 1))
+    sleep "$delay"
+  done
+}
 
 if [ "$(id -u)" != "0" ]; then
   echo "запусти от root: sudo bash install.sh"
@@ -46,32 +60,35 @@ if [ -z "$PANEL_DOMAIN" ] || [ -z "$SUB_DOMAIN" ] || [ -z "$BOT_TOKEN" ] || [ -z
   exit 1
 fi
 
-ADMIN_PANEL_PASSWORD=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 14)
+ADMIN_PANEL_PASSWORD=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 14) || true
 
 echo
 echo "ставим пакеты..."
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq curl wget git openssl ufw fail2ban \
+retry apt-get update -qq
+retry apt-get install -y -qq curl wget git openssl ufw fail2ban \
   python3 python3-venv python3-pip \
   nginx-full certbot > /dev/null
 
+install_xray() {
+  bash -c "$(curl -Ls https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+}
 if [ ! -f /usr/local/bin/xray ]; then
   echo "ставим Xray-core..."
-  bash -c "$(curl -Ls https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+  retry install_xray
 fi
 
 echo "клонируем репозиторий в $APP_DIR..."
 if [ -d "$APP_DIR/.git" ]; then
-  git -C "$APP_DIR" pull --quiet
+  retry git -C "$APP_DIR" pull --quiet
 else
-  git clone --quiet "$REPO_URL" "$APP_DIR"
+  retry git clone --quiet "$REPO_URL" "$APP_DIR"
 fi
 
 cd "$APP_DIR"
 python3 -m venv venv
-venv/bin/pip install --quiet --upgrade pip
-venv/bin/pip install --quiet -r requirements.txt
+retry venv/bin/pip install --quiet --upgrade pip
+retry venv/bin/pip install --quiet -r requirements.txt
 
 echo "генерируем Reality-ключи..."
 KEYS=$(/usr/local/bin/xray x25519)
@@ -134,9 +151,9 @@ ln -sf /etc/nginx/sites-available/mbs-http80.conf /etc/nginx/sites-enabled/mbs-h
 nginx -t && systemctl enable --now nginx && systemctl reload nginx
 
 echo "выпускаем сертификаты..."
-certbot certonly --webroot -w "$WEBROOT" --non-interactive --agree-tos \
+retry certbot certonly --webroot -w "$WEBROOT" --non-interactive --agree-tos \
   --register-unsafely-without-email -d "$PANEL_DOMAIN" -d "$SUB_DOMAIN"
-certbot certonly --webroot -w "$WEBROOT" --non-interactive --agree-tos \
+retry certbot certonly --webroot -w "$WEBROOT" --non-interactive --agree-tos \
   --register-unsafely-without-email -d "$DE1_ADDRESS"
 
 mkdir -p /etc/letsencrypt/renewal-hooks/deploy
