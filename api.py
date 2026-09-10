@@ -478,6 +478,20 @@ def admin_revoke_subscription(uuid: str, request: Request):
     return {"ok": True}
 
 
+@app.post("/admin/api/subscriptions/{uuid}/reset-traffic")
+def admin_reset_traffic(uuid: str, request: Request):
+    require_admin(request)
+    subs = db.list_all_subscriptions(limit=5000)
+    sub = next((s for s in subs if s["uuid"] == uuid), None)
+    if not sub:
+        raise HTTPException(404, "not found")
+    node = db.get_node(sub["node"])
+    if not node:
+        raise HTTPException(404, "node not found")
+    ok = xray_manager.reset_stats_for_node(node, uuid)
+    return {"ok": ok}
+
+
 @app.get("/admin/api/users/{tg_id}/devices")
 def admin_list_devices(tg_id: int, request: Request):
     require_admin(request)

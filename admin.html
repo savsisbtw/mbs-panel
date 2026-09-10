@@ -442,7 +442,7 @@
       <div class="section">
         <div class="section-head"><h2>По подпискам</h2></div>
         <div class="table-wrap"><table><thead><tr>
-          <th>Пользователь</th><th>Сервер</th><th>Входящий</th><th>Исходящий</th><th>Всего</th>
+          <th>Пользователь</th><th>Сервер</th><th>Входящий</th><th>Исходящий</th><th>Всего</th><th></th>
         </tr></thead><tbody id="traffic-body"></tbody></table></div>
       </div>
     </div>
@@ -690,8 +690,22 @@ async function loadTraffic() {
 
   const body = document.getElementById("traffic-body");
   body.innerHTML = t.per_subscription.length ? t.per_subscription.map((r) => `
-    <tr><td>${esc(r.username)}</td><td>${esc(r.node_label)}</td><td>${r.up_fmt}</td><td>${r.down_fmt}</td><td>${r.total_fmt}</td></tr>
-  `).join("") : '<tr><td colspan="5"><div class="empty">Пока нет данных по трафику</div></td></tr>';
+    <tr><td>${esc(r.username)}</td><td>${esc(r.node_label)}</td><td>${r.up_fmt}</td><td>${r.down_fmt}</td><td>${r.total_fmt}</td>
+    <td><button class="muted-btn" onclick="resetTraffic('${r.uuid}', this)">Сбросить</button></td></tr>
+  `).join("") : '<tr><td colspan="6"><div class="empty">Пока нет данных по трафику</div></td></tr>';
+}
+
+async function resetTraffic(uuid, btn) {
+  if (!confirm("Сбросить счётчик трафика для этой подписки?")) return;
+  btn.disabled = true;
+  btn.textContent = "…";
+  try {
+    await api(`/admin/api/subscriptions/${uuid}/reset-traffic`, { method: "POST" });
+    loadTraffic();
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = "Сбросить";
+  }
 }
 
 function fmtDate(iso) { return iso ? iso.slice(0, 10) : "—"; }

@@ -330,6 +330,22 @@ def remote_query_stats(node: dict) -> dict:
     return result
 
 
+def remote_reset_stats(node: dict, email: str) -> bool:
+    try:
+        client = _mgmt_connect(node["address"])
+        try:
+            client.exec_command(
+                f"/usr/local/bin/xray api statsquery --server=127.0.0.1:10085 "
+                f"-pattern 'user>>>{email}>>>traffic' -reset",
+                timeout=10,
+            )
+        finally:
+            client.close()
+        return True
+    except Exception:
+        return False
+
+
 STATUS_CMD = (
     "echo LOAD:$(cut -d' ' -f1 /proc/loadavg); "
     "echo MEMTOTAL:$(grep MemTotal /proc/meminfo | awk '{print $2}'); "

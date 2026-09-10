@@ -159,6 +159,27 @@ def query_stats() -> dict:
     return result
 
 
+def reset_stats(email: str) -> bool:
+    try:
+        subprocess.run(
+            ["/usr/local/bin/xray", "api", "statsquery", "--server=127.0.0.1:10085",
+             "-pattern", f"user>>>{email}>>>traffic", "-reset"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return True
+    except Exception:
+        return False
+
+
+def reset_stats_for_node(node: dict, email: str) -> bool:
+    if node["kind"] == "local":
+        return reset_stats(email)
+    if node["kind"] == "managed":
+        import nodeprov
+        return nodeprov.remote_reset_stats(node, email)
+    return False
+
+
 def local_node_status() -> dict:
     try:
         with open("/proc/loadavg") as f:
