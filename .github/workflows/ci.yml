@@ -60,3 +60,53 @@ jobs:
           assert len(script) > 500
           print("node install script rendered OK,", len(script), "bytes")
           PYEOF
+
+      - name: Smoke test app wiring + payments + HWID logic
+        env:
+          BOT_TOKEN: "123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          BOT_USERNAME: "x"
+          ADMIN_IDS: "1"
+          ADMIN_PANEL_PASSWORD: "ci-test-password-not-real"
+          PANEL_DOMAIN: "panel.test"
+          SUB_DOMAIN: "sub.test"
+          SITE_DOMAIN: "test"
+          XRAY_PUBLIC_KEY: "x"
+          XRAY_SHORT_ID_TCP: "x"
+          XRAY_SHORT_ID_GRPC: "x"
+          XRAY_SHORT_ID_XHTTP: "x"
+          PAYMENTS_ENABLED: "true"
+          YOOKASSA_ENABLED: "true"
+          YOOKASSA_SHOP_ID: "123"
+          YOOKASSA_SECRET_KEY: "xxx"
+          PLATEGA_ENABLED: "true"
+          PLATEGA_MERCHANT_ID: "abc"
+          PLATEGA_SECRET: "yyy"
+          HWID_LIMIT_ENABLED: "true"
+        run: |
+          python - << 'PYEOF'
+          import hashlib
+          import hmac
+
+          import api
+          import bot
+          import payments
+          import db
+
+          assert set(payments.available_providers()) == {"yookassa", "platega"}
+
+          good_sig = hmac.new(b"yyy", b'{"a":1}', hashlib.sha256).hexdigest()
+          assert payments.verify_platega_signature(b'{"a":1}', good_sig)
+          assert not payments.verify_platega_signature(b'{"a":1}', "wrong")
+
+          db.init_db()
+          db.create_payment("pid1", 1, "de1", "1m", "yookassa", 399)
+          assert db.mark_payment_paid("pid1")["status"] == "paid"
+          assert db.mark_payment_paid("pid1") is None
+
+          db.get_or_create_user(1, "tester")
+          db.add_device(1, "hwid-aaaaaaaaaa", "android", "Pixel", "ua")
+          assert db.count_devices(1) == 1
+          assert db.get_device(1, "hwid-aaaaaaaaaa") is not None
+
+          print("app wiring + payments + HWID logic OK")
+          PYEOF
