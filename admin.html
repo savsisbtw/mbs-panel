@@ -23,6 +23,11 @@
     font-family: Montserrat, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     -webkit-font-smoothing: antialiased; font-size: 14px;
   }
+  * { scrollbar-color: var(--border-strong) transparent; scrollbar-width: thin; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 10px; border: 2px solid var(--bg); background-clip: padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--muted); background-clip: padding-box; }
   button, input, select { font-family: inherit; font-size: 14px; }
   a { color: var(--accent); text-decoration: none; }
 
@@ -207,6 +212,11 @@
     font-family: "Fira Mono", ui-monospace, monospace; font-size: 12.5px; color: var(--accent);
     word-break: break-all; position: relative;
   }
+  .doc-block { margin-bottom: 30px; padding-bottom: 26px; border-bottom: 1px solid var(--border); }
+  .doc-block:last-child { border-bottom: none; }
+  .doc-block h2 { font-size: 16px; margin: 0 0 12px; font-weight: 600; }
+  .doc-block p { font-size: 13.5px; color: var(--text-dim); line-height: 1.65; margin: 0 0 10px; }
+  .doc-block code { background: rgba(255,255,255,0.06); padding: 1px 6px; border-radius: 5px; font-family: "Fira Mono", ui-monospace, monospace; font-size: 12px; }
   .copy-btn {
     position: absolute; top: 8px; right: 8px; background: var(--card2-tint); border: 1px solid var(--border);
     color: var(--muted); border-radius: 6px; padding: 4px 8px; font-size: 11px; cursor: pointer;
@@ -283,6 +293,7 @@
     <div class="nav-item" data-view="nodes" onclick="showView('nodes')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><line x1="7" y1="7" x2="7.01" y2="7"/><line x1="7" y1="17" x2="7.01" y2="17"/></svg>Ноды</div>
     <div class="nav-item" data-view="traffic" onclick="showView('traffic')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3,13 8,13 10,7 14,19 16,13 21,13"/></svg>Трафик</div>
     <div class="nav-item" data-view="payments" onclick="showView('payments')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>Платежи</div>
+    <div class="nav-item" data-view="docs" onclick="showView('docs')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>Документация</div>
     <div class="sidebar-footer">
       <button class="btn ghost" style="width:100%" onclick="logout()">Выйти</button>
       <div class="version-tag">MBS Panel v1.0.0 · <a href="https://github.com/devsavsis/mbs-panel/releases/latest" target="_blank" style="color:inherit">обновления</a></div>
@@ -478,6 +489,36 @@
       <div class="table-wrap"><table><thead><tr>
         <th>Пользователь</th><th>Сервер</th><th>Тариф</th><th>Провайдер</th><th>Сумма</th><th>Создан</th><th>Статус</th><th></th>
       </tr></thead><tbody id="payments-body"></tbody></table></div>
+    </div>
+
+    <div id="view-docs" class="view">
+      <div class="page-title">Документация</div>
+      <div class="page-sub">Как устроена панель и как её обслуживать — без похода на GitHub</div>
+
+      <div class="doc-block">
+        <h2>Архитектура</h2>
+        <p>Панель — три процесса: <b>bot.py</b> (телеграм-бот, aiogram) и <b>api.py</b> (FastAPI — админка + выдача подписок) читают одну SQLite-базу; <b>Xray</b> — отдельный процесс, который реально гоняет трафик. Панель никогда не проксирует VPN-трафик сама, только управляет конфигом Xray и читает его статистику через встроенный Stats API.</p>
+        <p>На 443 порту одновременно живёт и настоящий HTTPS (для сайта/подписки), и замаскированный под HTTPS VLESS+Reality — их разводит <code>nginx stream</code> модуль по SNI входящего TLS-соединения, до расшифровки.</p>
+      </div>
+
+      <div class="doc-block">
+        <h2>Ноды</h2>
+        <p><b>Локальная нода</b> (обычно <code>de1</code>) — Xray на том же сервере, что и панель, управляется напрямую правкой <code>config.json</code>. <b>Управляемые ноды</b> — отдельные серверы, панель ходит на них по SSH management-ключу (генерится сам при первом добавлении ноды, публичная часть раздаётся install-скриптом ноды — панель никогда не просит пароль от нового сервера).</p>
+        <p>Добавление ноды: Ноды → Добавить ноду → один <code>bash &lt;(curl ...)&gt;</code> на чистый сервер. Редактирование существующей: кнопка «Редактировать» у ноды — для de1 доступно только название (реальные параметры подключения там берутся из <code>.env</code>, не из базы).</p>
+      </div>
+
+      <div class="doc-block">
+        <h2>Пароль и безопасность</h2>
+        <p>Пароль админ-панели меняется командой <code>mbs pass</code> на сервере (без аргумента — сгенерит случайный). Панель физически откажется стартовать, если в <code>.env</code> стоит "change-me"/"admin"/что-то короче 8 символов — так что пропустить это не выйдет по-тихому.</p>
+        <p>Сессия логина живёт в httpOnly-куке, на <code>/admin/api/login</code> висит rate-limit (5 попыток в минуту с одного IP). SSH-доступ на сервер — сам по себе, панель на него не влияет; отдельно стоит подумать про отключение root-логина по паролю в пользу ключей, если этого ещё не сделано.</p>
+      </div>
+
+      <div class="doc-block">
+        <h2>fail2ban</h2>
+        <p><code>install.sh</code> ставит и включает fail2ban автоматически (дефолтный jail — защита SSH от перебора паролей). Проверить, что работает:</p>
+        <div class="code-box">fail2ban-client status<button class="copy-btn" onclick="copyText('fail2ban-client status')">Копировать</button></div>
+        <p class="page-sub" style="margin-top:8px">Посмотреть забаненные IP по конкретному джейлу: <code>fail2ban-client status sshd</code>. Разбанить: <code>fail2ban-client set sshd unbanip АЙПИ</code>.</p>
+      </div>
     </div>
   </div>
 </div>
