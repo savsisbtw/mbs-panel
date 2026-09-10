@@ -814,13 +814,16 @@ def admin_node_status(code: str, request: Request):
 ADMIN_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "admin.html")
 
 
+_NO_CACHE = {"Cache-Control": "no-cache, must-revalidate"}
+
+
 @app.get("/")
 def root(request: Request):
     if request.headers.get("host", "").split(":")[0] == PANEL_DOMAIN:
-        return FileResponse(ADMIN_HTML_PATH)
+        return FileResponse(ADMIN_HTML_PATH, headers=_NO_CACHE)
     raise HTTPException(404)
 
 
 @app.get("/admin")
 def admin_page():
-    return FileResponse(ADMIN_HTML_PATH)
+    return FileResponse(ADMIN_HTML_PATH, headers=_NO_CACHE)
