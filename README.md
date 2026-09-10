@@ -1,5 +1,11 @@
 # MBS Panel
 
+[![CI](https://github.com/devsavsis/mbs-panel/actions/workflows/ci.yml/badge.svg)](https://github.com/devsavsis/mbs-panel/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/devsavsis/mbs-panel?include_prereleases)](https://github.com/devsavsis/mbs-panel/releases)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
+[![Xray-core](https://img.shields.io/badge/xray--core-latest-red)](https://github.com/XTLS/Xray-core)
+
 Самостоятельная VPN-панель на VLESS+Reality (+ gRPC/XHTTP/WS-TLS транспорты) и Hysteria2. Телеграм-бот для выдачи подписок, веб-сайт с личным кабинетом, и админ-панель для управления нодами, юзерами и трафиком — всё в одном репозитории, без сторонних панелей типа x-ui или Marzban под капотом.
 
 Сделано by savsis. Изначально писалось под конкретный проект (шеринг VPN среди своих), но получилось достаточно универсально, чтобы выложить как есть.
