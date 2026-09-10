@@ -703,6 +703,10 @@ function statCard(label, value, color, icon, delay) {
   </div>`;
 }
 
+function rowAttr(i) {
+  return `class="reveal" style="animation-delay:${Math.min(i, 10) * 0.025}s"`;
+}
+
 async function loadTraffic() {
   const t = await api("/admin/api/traffic");
   const grid = document.getElementById("traffic-stat-grid");
@@ -713,8 +717,8 @@ async function loadTraffic() {
   ].map(([l, v, c, ic], i) => statCard(l, v, c, ic, i * 0.05)).join("");
 
   const body = document.getElementById("traffic-body");
-  body.innerHTML = t.per_subscription.length ? t.per_subscription.map((r) => `
-    <tr><td>${esc(r.username)}</td><td>${esc(r.node_label)}</td><td>${r.up_fmt}</td><td>${r.down_fmt}</td><td>${r.total_fmt}</td>
+  body.innerHTML = t.per_subscription.length ? t.per_subscription.map((r, i) => `
+    <tr ${rowAttr(i)}><td>${esc(r.username)}</td><td>${esc(r.node_label)}</td><td>${r.up_fmt}</td><td>${r.down_fmt}</td><td>${r.total_fmt}</td>
     <td><button class="muted-btn" onclick="resetTraffic('${r.uuid}', this)">Сбросить</button></td></tr>
   `).join("") : '<tr><td colspan="6"><div class="empty">Пока нет данных по трафику</div></td></tr>';
 }
@@ -756,8 +760,8 @@ async function loadDashboard() {
   const subs = await api("/admin/api/subscriptions");
   const body = document.getElementById("recent-subs-body");
   const recent = subs.slice(0, 8);
-  body.innerHTML = recent.length ? recent.map((s) => `
-    <tr><td>${s.username ? "@" + esc(s.username) : "tg" + s.tg_id}</td><td>${esc(s.node_label)}</td><td>${esc(s.plan_label)}</td>
+  body.innerHTML = recent.length ? recent.map((s, i) => `
+    <tr ${rowAttr(i)}><td>${s.username ? "@" + esc(s.username) : "tg" + s.tg_id}</td><td>${esc(s.node_label)}</td><td>${esc(s.plan_label)}</td>
     <td>${fmtDate(s.expires_at)}</td><td>${statusBadge(s.active, s.days_left)}</td></tr>
   `).join("") : '<tr><td colspan="5"><div class="empty">Пока нет подписок</div></td></tr>';
 }
@@ -765,8 +769,8 @@ async function loadDashboard() {
 async function loadSubscriptions() {
   const subs = await api("/admin/api/subscriptions");
   const body = document.getElementById("subs-body");
-  body.innerHTML = subs.length ? subs.map((s) => `
-    <tr><td>${s.username ? "@" + esc(s.username) : "tg" + s.tg_id}</td><td>${esc(s.node_label)}</td><td>${esc(s.plan_label)}</td>
+  body.innerHTML = subs.length ? subs.map((s, i) => `
+    <tr ${rowAttr(i)}><td>${s.username ? "@" + esc(s.username) : "tg" + s.tg_id}</td><td>${esc(s.node_label)}</td><td>${esc(s.plan_label)}</td>
     <td>${fmtDate(s.created_at)}</td><td>${fmtDate(s.expires_at)}</td><td>${statusBadge(s.active, s.days_left)}</td>
     <td>
       <button class="muted-btn" onclick="openUserCard(${s.tg_id}, '${esc(s.username ? '@' + s.username : 'tg' + s.tg_id)}')">Карточка</button>
@@ -803,8 +807,8 @@ function switchUserTab(tab) {
 }
 function renderUcSubs(subs) {
   const list = document.getElementById("uc-subs-list");
-  list.innerHTML = subs.length ? subs.map((s) => `
-    <div class="uc-sub-row">
+  list.innerHTML = subs.length ? subs.map((s, i) => `
+    <div class="uc-sub-row reveal" style="animation-delay:${Math.min(i, 10) * 0.025}s">
       <div>
         <div>${esc(s.node_label)} — ${esc(s.plan_label)}</div>
         <div class="page-sub" style="margin:2px 0 0">до ${fmtDate(s.expires_at)} · ${statusBadge(s.active, s.days_left)}</div>
@@ -822,8 +826,8 @@ async function grantSubscription() {
 }
 function renderDevices(devices) {
   const list = document.getElementById("devices-list");
-  list.innerHTML = devices.length ? devices.map((d) => `
-    <div class="device-row">
+  list.innerHTML = devices.length ? devices.map((d, i) => `
+    <div class="device-row reveal" style="animation-delay:${Math.min(i, 10) * 0.025}s">
       <div>
         <div>${esc(d.device_model || d.device_os || "Неизвестное устройство")}</div>
         <div class="page-sub" style="margin:2px 0 0">${esc(d.device_os || "")} · с ${fmtDate(d.first_seen)}</div>
@@ -862,8 +866,8 @@ async function loadGifts() {
 
   const codes = await api("/admin/api/gift-codes");
   const body = document.getElementById("gifts-body");
-  body.innerHTML = codes.length ? codes.map((c) => `
-    <tr><td>${esc(c.node_label)}</td><td>${esc(c.plan_label)}</td><td>${fmtDate(c.created_at)}</td>
+  body.innerHTML = codes.length ? codes.map((c, i) => `
+    <tr ${rowAttr(i)}><td>${esc(c.node_label)}</td><td>${esc(c.plan_label)}</td><td>${fmtDate(c.created_at)}</td>
     <td>${c.used_by ? '<span class="badge bad">использован</span>' : '<span class="badge ok">свободен</span>'}</td>
     <td><button class="muted-btn" onclick="copyText('${c.link}')">Скопировать</button></td></tr>
   `).join("") : '<tr><td colspan="5"><div class="empty">Пока нет гифт-кодов</div></td></tr>';
@@ -883,8 +887,8 @@ async function loadNodes() {
   const nodes = await api("/admin/api/nodes");
   nodesCache = nodes;
   const body = document.getElementById("nodes-body");
-  body.innerHTML = nodes.map((n) => `
-    <tr>
+  body.innerHTML = nodes.map((n, i) => `
+    <tr ${rowAttr(i)}>
       <td>${esc(n.label)}</td><td>${esc(n.address) || "—"}${n.port && n.address ? ":" + n.port : ""}</td>
       <td>${n.kind === "local" ? "локальная" : n.kind === "managed" ? "управляемая" : "внешняя"}</td>
       <td>${n.status === "pending" ? '<span class="badge warn">ожидает установки</span>' : (n.enabled ? '<span class="badge ok">включена</span>' : '<span class="badge bad">выключена</span>')}</td>
