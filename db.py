@@ -13,6 +13,17 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS devices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tg_id INTEGER NOT NULL,
+    hwid TEXT NOT NULL,
+    device_os TEXT,
+    device_model TEXT,
+    user_agent TEXT,
+    first_seen TEXT NOT NULL,
+    UNIQUE(tg_id, hwid)
+);
+
 CREATE TABLE IF NOT EXISTS subscriptions (
     uuid TEXT PRIMARY KEY,
     tg_id INTEGER NOT NULL,
@@ -86,6 +97,10 @@ _NEW_NODE_COLUMNS = {
     "hysteria_obfs_password": "TEXT",
 }
 
+_NEW_USER_COLUMNS = {
+    "hwid_limit": "INTEGER",
+}
+
 
 def _migrate():
     with get_conn() as conn:
@@ -93,6 +108,10 @@ def _migrate():
         for name, decl in _NEW_NODE_COLUMNS.items():
             if name not in cols:
                 conn.execute(f"ALTER TABLE nodes ADD COLUMN {name} {decl}")
+        ucols = {r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+        for name, decl in _NEW_USER_COLUMNS.items():
+            if name not in ucols:
+                conn.execute(f"ALTER TABLE users ADD COLUMN {name} {decl}")
 
 
 def now_iso():
@@ -410,3 +429,42 @@ def list_payments(limit: int = 200):
             "SELECT * FROM payments ORDER BY created_at DESC LIMIT ?", (limit,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def list_devices(tg_id: int):
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM devices WHERE tg_id=? ORDER BY first_seen ASC", (tg_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def count_devices(tg_id: int) -> int:
+    with get_conn() as conn:
+        return conn.execute("SELECT COUNT(*) c FROM devices WHERE tg_id=?", (tg_id,)).fetchone()["c"]
+
+
+def get_device(tg_id: int, hwid: str):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM devices WHERE tg_id=? AND hwid=?", (tg_id, hwid)).fetchone()
+        return dict(row) if row else None
+
+
+def add_device(tg_id: int, hwid: str, device_os: str | None, device_model: str | None, user_agent: str | None):
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO devices (tg_id, hwid, device_os, device_model, user_agent, first_seen) "
+            "VALUES (?,?,?,?,?,?)",
+            (tg_id, hwid, device_os, device_model, user_agent, now_iso()),
+        )
+    return get_device(tg_id, hwid)
+
+
+def delete_device(device_id: int):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM devices WHERE id=?", (device_id,))
+
+
+def set_user_hwid_limit(tg_id: int, limit: int | None):
+    with get_conn() as conn:
+        conn.execute("UPDATE users SET hwid_limit=? WHERE tg_id=?", (limit, tg_id))

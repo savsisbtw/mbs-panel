@@ -237,6 +237,13 @@
   .modal-close:hover { color: var(--text); background: var(--card2-tint); }
   .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
 
+  .device-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px;
+    font-size: 13.5px;
+  }
+  .devices-list { max-height: 260px; overflow-y: auto; margin: 4px 0 16px; }
+
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
     .reveal, .login-card, .splash-mark, .splash-title, .splash-tagline, .modal-overlay, .modal-card { opacity: 1 !important; transform: none !important; filter: none !important; }
@@ -408,6 +415,23 @@
           <button class="btn" onclick="saveEditNode()">Сохранить</button>
         </div>
         <div id="edit-node-err"></div>
+      </div>
+    </div>
+
+    <div id="devices-overlay" class="modal-overlay" onclick="if(event.target===this) closeDevices()">
+      <div class="modal-card">
+        <div class="modal-head">
+          <h2 id="devices-title">Устройства</h2>
+          <button class="modal-close" onclick="closeDevices()">&times;</button>
+        </div>
+        <div id="devices-list" class="devices-list"></div>
+        <label class="f">Лимит устройств для этого юзера</label>
+        <input type="text" id="devices-limit" placeholder="по умолчанию">
+        <p class="page-sub" id="devices-limit-hint" style="margin:6px 0 0"></p>
+        <div class="modal-actions">
+          <button class="btn ghost" onclick="closeDevices()">Закрыть</button>
+          <button class="btn" onclick="saveHwidLimit()">Сохранить лимит</button>
+        </div>
       </div>
     </div>
 
@@ -706,8 +730,48 @@ async function loadSubscriptions() {
   body.innerHTML = subs.length ? subs.map((s) => `
     <tr><td>${s.username ? "@" + esc(s.username) : "tg" + s.tg_id}</td><td>${esc(s.node_label)}</td><td>${esc(s.plan_label)}</td>
     <td>${fmtDate(s.created_at)}</td><td>${fmtDate(s.expires_at)}</td><td>${statusBadge(s.active, s.days_left)}</td>
-    <td>${s.active ? `<button class="muted-btn" onclick="revokeSub('${s.uuid}')">Отозвать</button>` : ""}</td></tr>
+    <td>
+      <button class="muted-btn" onclick="openDevices(${s.tg_id}, '${esc(s.username ? '@' + s.username : 'tg' + s.tg_id)}')">Устройства</button>
+      ${s.active ? `<button class="muted-btn" onclick="revokeSub('${s.uuid}')">Отозвать</button>` : ""}
+    </td></tr>
   `).join("") : '<tr><td colspan="7"><div class="empty">Пока нет подписок</div></td></tr>';
+}
+
+let devicesTgId = null;
+async function openDevices(tgId, label) {
+  devicesTgId = tgId;
+  document.getElementById("devices-title").textContent = `Устройства: ${label}`;
+  document.getElementById("devices-list").innerHTML = '<div class="empty">Загрузка…</div>';
+  document.getElementById("devices-overlay").classList.add("show");
+  const data = await api(`/admin/api/users/${tgId}/devices`);
+  document.getElementById("devices-limit").value = data.limit || "";
+  document.getElementById("devices-limit-hint").textContent = `По умолчанию (если пусто): ${data.fallback_limit}`;
+  renderDevices(data.devices);
+}
+function closeDevices() {
+  document.getElementById("devices-overlay").classList.remove("show");
+}
+function renderDevices(devices) {
+  const list = document.getElementById("devices-list");
+  list.innerHTML = devices.length ? devices.map((d) => `
+    <div class="device-row">
+      <div>
+        <div>${esc(d.device_model || d.device_os || "Неизвестное устройство")}</div>
+        <div class="page-sub" style="margin:2px 0 0">${esc(d.device_os || "")} · с ${fmtDate(d.first_seen)}</div>
+      </div>
+      <button class="muted-btn" onclick="deleteDevice(${d.id})">Удалить</button>
+    </div>
+  `).join("") : '<div class="empty">Нет привязанных устройств</div>';
+}
+async function deleteDevice(deviceId) {
+  await api(`/admin/api/users/${devicesTgId}/devices/${deviceId}`, { method: "DELETE" });
+  const data = await api(`/admin/api/users/${devicesTgId}/devices`);
+  renderDevices(data.devices);
+}
+async function saveHwidLimit() {
+  const val = document.getElementById("devices-limit").value.trim();
+  await api(`/admin/api/users/${devicesTgId}/hwid-limit`, { method: "POST", body: JSON.stringify({ limit: val || null }) });
+  closeDevices();
 }
 
 async function revokeSub(uuid) {

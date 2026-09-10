@@ -1,6 +1,7 @@
 import datetime
 import json
 import os
+import re
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Body
@@ -14,7 +15,10 @@ import xray_manager
 from config import (
     PLANS, PLANS_BY_CODE, SITE_DOMAIN, SUB_DOMAIN, PANEL_DOMAIN,
     ADMIN_PANEL_PASSWORD, BOT_USERNAME, BOT_TOKEN,
+    HWID_LIMIT_ENABLED, HWID_FALLBACK_LIMIT,
 )
+
+HWID_RE = re.compile(r"^[a-zA-Z0-9=-]{10,64}$")
 
 db.init_db()
 
@@ -210,6 +214,22 @@ def get_subscription(token: str, request: Request):
             return HTMLResponse(SUB_PAGE_EXPIRED_TEMPLATE.format(bot_username=BOT_USERNAME))
         sub_url = f"https://{SUB_DOMAIN}/sub/{token}"
         return HTMLResponse(SUB_PAGE_TEMPLATE.format(sub_url=sub_url))
+
+    if HWID_LIMIT_ENABLED:
+        hwid = request.headers.get("x-hwid", "")
+        if not HWID_RE.match(hwid):
+            raise HTTPException(404, "hwid required")
+        if not db.get_device(user["tg_id"], hwid):
+            limit = user["hwid_limit"] or HWID_FALLBACK_LIMIT
+            if db.count_devices(user["tg_id"]) >= limit:
+                raise HTTPException(404, "device limit reached", headers={"x-hwid-max-devices-reached": "true"})
+            db.add_device(
+                user["tg_id"], hwid,
+                request.headers.get("x-device-os"),
+                request.headers.get("x-device-model"),
+                ua,
+            )
+
     content = links.build_subscription_text(subs)
     return Response(content=content, media_type="text/plain")
 
@@ -455,6 +475,31 @@ def admin_revoke_subscription(uuid: str, request: Request):
     if node:
         xray_manager.remove_client_from_node(node, uuid)
     db.revoke_subscription(uuid)
+    return {"ok": True}
+
+
+@app.get("/admin/api/users/{tg_id}/devices")
+def admin_list_devices(tg_id: int, request: Request):
+    require_admin(request)
+    return {
+        "devices": db.list_devices(tg_id),
+        "limit": db.get_or_create_user(tg_id, None).get("hwid_limit"),
+        "fallback_limit": HWID_FALLBACK_LIMIT,
+    }
+
+
+@app.delete("/admin/api/users/{tg_id}/devices/{device_id}")
+def admin_delete_device(tg_id: int, device_id: int, request: Request):
+    require_admin(request)
+    db.delete_device(device_id)
+    return {"ok": True}
+
+
+@app.post("/admin/api/users/{tg_id}/hwid-limit")
+def admin_set_hwid_limit(tg_id: int, request: Request, body: dict = Body(...)):
+    require_admin(request)
+    limit = body.get("limit")
+    db.set_user_hwid_limit(tg_id, int(limit) if limit else None)
     return {"ok": True}
 
 
