@@ -87,6 +87,14 @@ CREATE TABLE IF NOT EXISTS nodes (
     enabled INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_subs_active_expires ON subscriptions (active, expires_at);
+CREATE INDEX IF NOT EXISTS idx_subs_tg_id ON subscriptions (tg_id);
+CREATE INDEX IF NOT EXISTS idx_subs_node ON subscriptions (node);
+CREATE INDEX IF NOT EXISTS idx_devices_tg_id ON devices (tg_id);
+CREATE INDEX IF NOT EXISTS idx_payments_status ON payments (status);
+CREATE INDEX IF NOT EXISTS idx_gift_codes_used_by ON gift_codes (used_by);
+CREATE INDEX IF NOT EXISTS idx_admin_sessions_expires ON admin_sessions (expires_at);
 """
 
 _NEW_NODE_COLUMNS = {
@@ -124,6 +132,7 @@ def get_conn():
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
     try:
         yield conn
         conn.commit()
