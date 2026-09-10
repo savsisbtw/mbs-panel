@@ -581,6 +581,15 @@ function flagEmoji(code) {
   return code.split("").map((c) => String.fromCodePoint(127397 + c.charCodeAt(0))).join("");
 }
 
+function flagToCode(label) {
+  const chars = Array.from(label || "");
+  if (chars.length < 2) return null;
+  const cp1 = chars[0].codePointAt(0) - 127397;
+  const cp2 = chars[1].codePointAt(0) - 127397;
+  if (cp1 < 65 || cp1 > 90 || cp2 < 65 || cp2 > 90) return null;
+  return String.fromCharCode(cp1) + String.fromCharCode(cp2);
+}
+
 function createDropdown(id, { options, value, placeholder, searchable, onChange }) {
   const container = document.getElementById(id);
   container.classList.add("dd");
@@ -829,7 +838,7 @@ async function openUserCard(tgId, label) {
   switchUserTab("subs");
   document.getElementById("devices-overlay").classList.add("show");
   if (!plansCache) plansCache = await api("/admin/api/plans");
-  if (!nodesCache) nodesCache = await api("/admin/api/nodes");
+  nodesCache = await api("/admin/api/nodes");
   DD.ucGrantNode.setOptions(nodesCache.filter((n) => n.enabled).map((n) => ({ value: n.code, label: n.label })));
   DD.ucGrantPlan.setOptions(plansCache.map((p) => ({ value: p.code, label: p.label })));
   const data = await api(`/admin/api/users/${tgId}`);
@@ -897,7 +906,7 @@ let plansCache = null, nodesCache = null;
 
 async function loadGifts() {
   if (!plansCache) plansCache = await api("/admin/api/plans");
-  if (!nodesCache) nodesCache = await api("/admin/api/nodes");
+  nodesCache = await api("/admin/api/nodes");
   const nodeOptions = nodesCache.filter((n) => n.enabled).map((n) => ({ value: n.code, label: n.label }));
   const planOptions = plansCache.map((p) => ({ value: p.code, label: p.label }));
   DD.giftNode.setOptions(nodeOptions);
@@ -964,7 +973,7 @@ function openEditNode(code) {
   const isDe1 = code === "de1";
   document.getElementById("edit-node-title").textContent = `Редактировать: ${n.label}`;
   document.getElementById("edit-label").value = n.label || "";
-  DD.editCountry.setValue(null);
+  DD.editCountry.setValue(flagToCode(n.label));
   document.getElementById("edit-node-advanced").style.display = isDe1 ? "none" : "block";
   document.getElementById("edit-node-de1-note").style.display = isDe1 ? "block" : "none";
   document.getElementById("edit-address").value = n.address || "";
