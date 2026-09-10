@@ -9,8 +9,9 @@ from aiogram.enums import ParseMode
 
 import db
 import links
+import payments
 import xray_manager
-from config import BOT_TOKEN, ADMIN_IDS, PLANS, PLANS_BY_CODE, SUB_DOMAIN, SITE_DOMAIN
+from config import BOT_TOKEN, ADMIN_IDS, PLANS, PLANS_BY_CODE, SUB_DOMAIN, SITE_DOMAIN, PAYMENTS_ENABLED
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("mbs-bot")
@@ -49,7 +50,8 @@ def nodes_kb(prefix: str) -> InlineKeyboardMarkup:
 def plans_kb(prefix: str, node_code: str) -> InlineKeyboardMarkup:
     rows = []
     for p in PLANS:
-        rows.append([InlineKeyboardButton(text=p["label"], callback_data=f"{prefix}:{node_code}:{p['code']}")])
+        label = f"{p['label']} — {p['price']} ₽" if PAYMENTS_ENABLED and p["price"] > 0 else p["label"]
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"{prefix}:{node_code}:{p['code']}")])
     rows.append([InlineKeyboardButton(text="Назад", callback_data="menu:get")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -145,10 +147,27 @@ async def cb_node(cb: CallbackQuery):
     await cb.answer()
 
 
+def providers_kb(node_code: str, plan_code: str) -> InlineKeyboardMarkup:
+    rows = []
+    for p in payments.available_providers():
+        rows.append([InlineKeyboardButton(text=payments.PROVIDER_NAMES[p], callback_data=f"pay:{p}:{node_code}:{plan_code}")])
+    rows.append([InlineKeyboardButton(text="Назад", callback_data=f"node:{node_code}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 @dp.callback_query(F.data.startswith("plan:"))
 async def cb_plan(cb: CallbackQuery):
     _, node_code, plan_code = cb.data.split(":")
     plan = PLANS_BY_CODE[plan_code]
+    db.get_or_create_user(cb.from_user.id, cb.from_user.username)
+
+    if PAYMENTS_ENABLED and plan["price"] > 0 and payments.available_providers():
+        await cb.message.edit_text(
+            f"<b>{plan['label']}</b> — {plan['price']} ₽\n\nВыбери способ оплаты:",
+            reply_markup=providers_kb(node_code, plan_code),
+        )
+        return await cb.answer()
+
     user = db.get_or_create_user(cb.from_user.id, cb.from_user.username)
     sub = db.create_subscription(cb.from_user.id, node_code, plan["days"], plan_code, source="bot")
     node_row = db.get_node(node_code)
@@ -166,6 +185,33 @@ async def cb_plan(cb: CallbackQuery):
         reply_markup=kb,
     )
     await cb.answer("Подписка выдана")
+
+
+@dp.callback_query(F.data.startswith("pay:"))
+async def cb_pay(cb: CallbackQuery):
+    _, provider, node_code, plan_code = cb.data.split(":")
+    plan = PLANS_BY_CODE[plan_code]
+    node_row = db.get_node(node_code)
+    payment_id = payments.new_payment_id()
+    db.create_payment(payment_id, cb.from_user.id, node_code, plan_code, provider, plan["price"])
+    try:
+        external_id, pay_url = payments.create_payment_link(
+            provider, payment_id, plan["price"], f"MBS Panel — {node_row['label']}, {plan['label']}",
+        )
+    except Exception:
+        log.exception("payment creation failed")
+        db.mark_payment_failed(payment_id)
+        return await cb.answer("Не получилось создать платёж, попробуй позже", show_alert=True)
+    db.set_payment_external(payment_id, external_id, pay_url)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Оплатить", url=pay_url)],
+        [InlineKeyboardButton(text="Назад", callback_data=f"plan:{node_code}:{plan_code}")],
+    ])
+    await cb.message.edit_text(
+        f"Счёт на {plan['price']} ₽ создан.\nПосле оплаты подписка выдастся автоматически.",
+        reply_markup=kb,
+    )
+    await cb.answer()
 
 
 @dp.callback_query(F.data == "menu:mysub")

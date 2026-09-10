@@ -9,10 +9,11 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, FileResponse
 import db
 import links
 import nodeprov
+import payments
 import xray_manager
 from config import (
     PLANS, PLANS_BY_CODE, SITE_DOMAIN, SUB_DOMAIN, PANEL_DOMAIN,
-    ADMIN_PANEL_PASSWORD, BOT_USERNAME,
+    ADMIN_PANEL_PASSWORD, BOT_USERNAME, BOT_TOKEN,
 )
 
 db.init_db()
@@ -249,6 +250,80 @@ def install_script(token: str):
     if not node:
         raise HTTPException(404, "unknown token")
     return nodeprov.render_install_script(node)
+
+
+def _tg_send_message(tg_id: int, text: str):
+    import urllib.request
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    data = json.dumps({"chat_id": tg_id, "text": text, "parse_mode": "HTML"}).encode()
+    req = urllib.request.Request(url, data=data, method="POST", headers={"Content-Type": "application/json"})
+    try:
+        urllib.request.urlopen(req, timeout=10)
+    except Exception:
+        pass
+
+
+def _grant_paid_subscription(payment_id: str):
+    payment = db.mark_payment_paid(payment_id)
+    if not payment:
+        return
+    plan = PLANS_BY_CODE.get(payment["plan"])
+    node = db.get_node(payment["node"])
+    if not plan or not node:
+        return
+    sub = db.create_subscription(payment["tg_id"], payment["node"], plan["days"], payment["plan"], source="payment")
+    xray_manager.add_client_to_node(node, sub["uuid"], email=sub["uuid"])
+    user = db.get_or_create_user(payment["tg_id"], None)
+    _tg_send_message(
+        payment["tg_id"],
+        f"<b>Оплата получена</b>\n\n"
+        f"Сервер: {node['label']}\n"
+        f"Срок: {plan['label']} — до {sub['expires_at'][:10]}\n\n"
+        f"Ссылка-подписка:\nhttps://{SUB_DOMAIN}/sub/{user['token']}",
+    )
+
+
+@app.post("/payments/webhook/yookassa")
+async def yookassa_webhook(request: Request):
+    body = await request.json()
+    if not payments.verify_yookassa_notification(body):
+        raise HTTPException(400, "unexpected event")
+    obj = body.get("object", {})
+    if obj.get("status") != "succeeded":
+        return {"ok": True}
+    payment_id = (obj.get("metadata") or {}).get("payment_id")
+    if not payment_id:
+        raise HTTPException(400, "missing payment_id")
+    _grant_paid_subscription(payment_id)
+    return {"ok": True}
+
+
+@app.post("/payments/webhook/platega")
+async def platega_webhook(request: Request):
+    raw = await request.body()
+    signature = request.headers.get("x-signature") or request.headers.get("signature") or ""
+    if not payments.verify_platega_signature(raw, signature):
+        raise HTTPException(401, "bad signature")
+    body = json.loads(raw)
+    status = (body.get("status") or "").lower()
+    payment_id = body.get("id") or body.get("paymentId")
+    if status not in ("succeeded", "success", "paid") or not payment_id:
+        return {"ok": True}
+    _grant_paid_subscription(payment_id)
+    return {"ok": True}
+
+
+@app.get("/pay/done", response_class=HTMLResponse)
+def pay_done():
+    return (
+        "<!doctype html><html lang='ru'><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        "<title>Оплата</title></head>"
+        "<body style='background:#0a0b0f;color:#eceef2;font-family:sans-serif;"
+        "display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center'>"
+        "<div><h2>Спасибо!</h2><p>Возвращайся в Telegram — подписка придёт туда автоматически "
+        "в течение минуты после подтверждения оплаты.</p></div></body></html>"
+    )
 
 
 @app.post("/nodes/register/{token}")

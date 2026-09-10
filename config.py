@@ -98,10 +98,20 @@ DE1_TRANSPORTS = [
 ]
 
 PLANS = [
-    {"code": "7d", "label": "7 дней", "days": 7},
-    {"code": "1m", "label": "1 месяц", "days": 30},
-    {"code": "3m", "label": "3 месяца", "days": 90},
-    {"code": "6m", "label": "6 месяцев", "days": 180},
-    {"code": "1y", "label": "1 год", "days": 365},
+    {"code": "7d", "label": "7 дней", "days": 7, "price": int(env("PRICE_7D", "150"))},
+    {"code": "1m", "label": "1 месяц", "days": 30, "price": int(env("PRICE_1M", "399"))},
+    {"code": "3m", "label": "3 месяца", "days": 90, "price": int(env("PRICE_3M", "999"))},
+    {"code": "6m", "label": "6 месяцев", "days": 180, "price": int(env("PRICE_6M", "1799"))},
+    {"code": "1y", "label": "1 год", "days": 365, "price": int(env("PRICE_1Y", "2999"))},
 ]
 PLANS_BY_CODE = {p["code"]: p for p in PLANS}
+
+PAYMENTS_ENABLED = env("PAYMENTS_ENABLED", "false").lower() == "true"
+
+YOOKASSA_ENABLED = env("YOOKASSA_ENABLED", "false").lower() == "true"
+YOOKASSA_SHOP_ID = env("YOOKASSA_SHOP_ID", "")
+YOOKASSA_SECRET_KEY = env("YOOKASSA_SECRET_KEY", "")
+
+PLATEGA_ENABLED = env("PLATEGA_ENABLED", "false").lower() == "true"
+PLATEGA_MERCHANT_ID = env("PLATEGA_MERCHANT_ID", "")
+PLATEGA_SECRET = env("PLATEGA_SECRET", "")

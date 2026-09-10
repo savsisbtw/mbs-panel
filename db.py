@@ -40,6 +40,20 @@ CREATE TABLE IF NOT EXISTS admin_sessions (
     expires_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS payments (
+    id TEXT PRIMARY KEY,
+    tg_id INTEGER NOT NULL,
+    node TEXT NOT NULL,
+    plan TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    external_id TEXT,
+    amount INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    pay_url TEXT,
+    created_at TEXT NOT NULL,
+    paid_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS nodes (
     code TEXT PRIMARY KEY,
     label TEXT NOT NULL,
@@ -342,3 +356,57 @@ def stats():
             "gifts_created": gifts_created,
             "gifts_used": gifts_used,
         }
+
+
+def create_payment(payment_id: str, tg_id: int, node: str, plan: str, provider: str, amount: int):
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO payments (id, tg_id, node, plan, provider, amount, status, created_at) "
+            "VALUES (?,?,?,?,?,?, 'pending', ?)",
+            (payment_id, tg_id, node, plan, provider, amount, now_iso()),
+        )
+    return get_payment(payment_id)
+
+
+def get_payment(payment_id: str):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM payments WHERE id=?", (payment_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def set_payment_external(payment_id: str, external_id: str, pay_url: str):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE payments SET external_id=?, pay_url=? WHERE id=?",
+            (external_id, pay_url, payment_id),
+        )
+    return get_payment(payment_id)
+
+
+def mark_payment_paid(payment_id: str):
+    with get_conn() as conn:
+        row = conn.execute("SELECT status FROM payments WHERE id=?", (payment_id,)).fetchone()
+        if not row or row["status"] == "paid":
+            return None
+        conn.execute(
+            "UPDATE payments SET status='paid', paid_at=? WHERE id=?",
+            (now_iso(), payment_id),
+        )
+    return get_payment(payment_id)
+
+
+def mark_payment_failed(payment_id: str):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE payments SET status='failed' WHERE id=? AND status='pending'",
+            (payment_id,),
+        )
+    return get_payment(payment_id)
+
+
+def list_payments(limit: int = 200):
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM payments ORDER BY created_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
