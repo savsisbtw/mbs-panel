@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Compile check all Python files
+        run: python -m compileall -q .
+
+      - name: Shell syntax check
+        run: |
+          bash -n install.sh
+          bash -n mbs
+
+      - name: Smoke test install-script rendering
+        env:
+          BOT_TOKEN: "x"
+          BOT_USERNAME: "x"
+          ADMIN_IDS: "1"
+          ADMIN_PANEL_PASSWORD: "x"
+          PANEL_DOMAIN: "panel.test"
+          SUB_DOMAIN: "sub.test"
+          SITE_DOMAIN: "test"
+          XRAY_PUBLIC_KEY: "x"
+          XRAY_SHORT_ID_TCP: "x"
+          XRAY_SHORT_ID_GRPC: "x"
+          XRAY_SHORT_ID_XHTTP: "x"
+        run: |
+          python - << 'PYEOF'
+          import json
+          import nodeprov
+
+          transports = nodeprov.build_transports("fi2.example.com", 443, "www.microsoft.com", "PUBKEY", include_ws=True)
+          node = {
+              "provision_token": "TESTTOKEN",
+              "address": "fi2.example.com",
+              "sni": "www.microsoft.com",
+              "private_key": "PRIVKEY",
+              "transports_json": json.dumps(transports),
+              "hysteria_enabled": 1,
+              "hysteria_port": 443,
+              "hysteria_password": "hypass",
+              "hysteria_obfs_password": "obfspass",
+          }
+          script = nodeprov.render_install_script(node)
+          assert "PRIVKEY" in script
+          assert len(script) > 500
+          print("node install script rendered OK,", len(script), "bytes")
+          PYEOF
