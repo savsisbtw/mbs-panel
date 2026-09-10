@@ -10,7 +10,7 @@ mbs — управление MBS Panel
 
   mbs pass [новый_пароль]   сменить пароль админ-панели (без аргумента — сгенерировать случайный)
   mbs status                статус всех сервисов (bot, api, xray, nginx)
-  mbs restart               перезапустить bot + api
+  mbs restart               перезапустить всё (bot, api, xray, reload nginx)
   mbs logs [bot|api|xray]   последние строки лога (по умолчанию api)
   mbs domain                показать текущий домен панели
   mbs update                обновить код с GitHub и перезапустить (не трогает .env и базу)
@@ -36,8 +36,9 @@ cmd_status() {
 }
 
 cmd_restart() {
-  systemctl restart mbs-bot mbs-api
-  echo "Перезапущено."
+  systemctl restart mbs-bot mbs-api xray
+  systemctl reload nginx 2>/dev/null || true
+  echo "Перезапущено: bot, api, xray (+ reload nginx)."
 }
 
 cmd_logs() {

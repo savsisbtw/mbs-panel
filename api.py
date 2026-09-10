@@ -2,6 +2,8 @@ import datetime
 import json
 import os
 import re
+import subprocess
+import urllib.request
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Body
@@ -14,13 +16,31 @@ import payments
 import xray_manager
 from config import (
     PLANS, PLANS_BY_CODE, SITE_DOMAIN, SUB_DOMAIN, PANEL_DOMAIN,
-    ADMIN_PANEL_PASSWORD, BOT_USERNAME, BOT_TOKEN,
+    ADMIN_PANEL_PASSWORD, BOT_USERNAME, BOT_TOKEN, BASE_DIR,
     HWID_LIMIT_ENABLED, HWID_FALLBACK_LIMIT,
 )
 
 HWID_RE = re.compile(r"^[a-zA-Z0-9=-]{10,64}$")
+ENV_PATH = os.path.join(BASE_DIR, ".env")
 
 db.init_db()
+
+
+def _update_env_var(key: str, value: str):
+    lines = []
+    if os.path.exists(ENV_PATH):
+        with open(ENV_PATH, encoding="utf-8") as f:
+            lines = f.readlines()
+    found = False
+    for i, line in enumerate(lines):
+        if line.strip().startswith(f"{key}="):
+            lines[i] = f"{key}={value}\n"
+            found = True
+            break
+    if not found:
+        lines.append(f"{key}={value}\n")
+    with open(ENV_PATH, "w", encoding="utf-8") as f:
+        f.writelines(lines)
 
 app = FastAPI(title="mbs-api")
 
@@ -275,7 +295,6 @@ def install_script(token: str):
 
 
 def _tg_send_message(tg_id: int, text: str):
-    import urllib.request
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     data = json.dumps({"chat_id": tg_id, "text": text, "parse_mode": "HTML"}).encode()
     req = urllib.request.Request(url, data=data, method="POST", headers={"Content-Type": "application/json"})
@@ -430,6 +449,37 @@ def admin_me(request: Request):
     token = request.cookies.get(ADMIN_COOKIE)
     return {"authenticated": db.validate_admin_session(token)}
 
+
+
+@app.get("/admin/api/settings/bot")
+def admin_get_bot_settings(request: Request):
+    require_admin(request)
+    masked = f"{BOT_TOKEN[:8]}...{BOT_TOKEN[-4:]}" if len(BOT_TOKEN) > 14 else "***"
+    return {"username": BOT_USERNAME, "token_masked": masked}
+
+
+@app.post("/admin/api/settings/bot")
+def admin_set_bot_settings(request: Request, body: dict = Body(...)):
+    require_admin(request)
+    token = (body.get("token") or "").strip()
+    if not token:
+        raise HTTPException(400, "token required")
+    try:
+        with urllib.request.urlopen(f"https://api.telegram.org/bot{token}/getMe", timeout=10) as resp:
+            data = json.loads(resp.read())
+    except Exception:
+        raise HTTPException(400, "не получилось проверить токен — нет связи с Telegram")
+    if not data.get("ok"):
+        raise HTTPException(400, "Telegram отклонил этот токен")
+    username = data["result"]["username"]
+    _update_env_var("BOT_TOKEN", token)
+    _update_env_var("BOT_USERNAME", username)
+    try:
+        subprocess.run(["systemctl", "restart", "mbs-bot"], check=True, timeout=15)
+        restarted = True
+    except Exception:
+        restarted = False
+    return {"ok": True, "username": username, "restarted": restarted}
 
 
 @app.get("/admin/api/stats")
