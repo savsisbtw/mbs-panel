@@ -36,6 +36,33 @@ flowchart LR
 
 Панель и первая VPN-нода живут на одном сервере. Дополнительные ноды подключаются по SSH (management-ключ, генерится сам при первом добавлении ноды) — панель не устанавливает на себя ничего от ноды, только управляет клиентами через SSH-команды и Xray Stats API.
 
+### Связь панели с нодой
+
+Два разных пути в зависимости от типа ноды (`node.kind` в БД):
+
+```mermaid
+flowchart TB
+    api["api.py / bot.py"] --> disp{"node.kind?"}
+
+    disp -->|local| xm["xray_manager.py"]
+    xm -->|"правит /usr/local/etc/xray/config.json напрямую + xray api statsquery"| xrayLocal["Xray на этой же машине"]
+
+    disp -->|managed| np["nodeprov.py"]
+    np -->|"SSH, ключ /root/.ssh/mbs_nodes_ed25519"| xrayRemote["Xray на удалённой ноде"]
+
+    subgraph ssh ["По SSH (nodeprov.py)"]
+        direction TB
+        f1["remote_add_client / remote_remove_client — правят config.json на ноде"]
+        f2["remote_query_stats — xray api statsquery"]
+        f3["remote_reset_stats — statsquery -reset"]
+        f4["remote_node_status — /proc/loadavg, /proc/meminfo, systemctl"]
+    end
+
+    np -.-> ssh
+```
+
+Публичный (`.pub`) ключ отдаётся самим install-скриптом ноды при первом запуске (`curl .../mgmt-pubkey.txt >> authorized_keys`) — панель никогда не просит пароль от новой ноды, только добавляет туда свой ключ через сам же install-скрипт, который админ запускает руками на новом сервере.
+
 ### Поток оплаты (когда `PAYMENTS_ENABLED=true`)
 
 ```mermaid
