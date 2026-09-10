@@ -190,6 +190,10 @@ sequenceDiagram
 
 PR и issues welcome. CI на каждый пуш гоняет compile-check по питону, синтаксис-проверку шелл-скриптов и smoke-тест генерации install-скрипта ноды.
 
+## Авторы:
+github.com/devsavsis
+github.com/welfizx
+
 ## Лицензия
 
 MIT — см. [LICENSE](LICENSE).
