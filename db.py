@@ -351,6 +351,20 @@ def revoke_subscription(client_uuid: str):
         conn.execute("UPDATE subscriptions SET active=0 WHERE uuid=?", (client_uuid,))
 
 
+def get_user(tg_id: int):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM users WHERE tg_id=?", (tg_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def list_subscriptions_for_user(tg_id: int):
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM subscriptions WHERE tg_id=? ORDER BY created_at DESC", (tg_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def list_gift_codes(limit: int = 200):
     with get_conn() as conn:
         rows = conn.execute(

@@ -492,6 +492,50 @@ def admin_reset_traffic(uuid: str, request: Request):
     return {"ok": ok}
 
 
+@app.get("/admin/api/users/{tg_id}")
+def admin_user_card(tg_id: int, request: Request):
+    require_admin(request)
+    user = db.get_user(tg_id)
+    if not user:
+        raise HTTPException(404, "not found")
+    subs = db.list_subscriptions_for_user(tg_id)
+    out_subs = []
+    for s in subs:
+        node = db.get_node(s["node"])
+        plan = PLANS_BY_CODE.get(s["plan"])
+        out_subs.append({
+            **s,
+            "node_label": node["label"] if node else s["node"],
+            "plan_label": plan["label"] if plan else s["plan"],
+            "days_left": _days_left(s["expires_at"]),
+        })
+    return {
+        "tg_id": user["tg_id"],
+        "username": user["username"],
+        "created_at": user["created_at"],
+        "token": user["token"],
+        "subscriptions": out_subs,
+        "devices": db.list_devices(tg_id),
+        "hwid_limit": user.get("hwid_limit"),
+        "hwid_fallback_limit": HWID_FALLBACK_LIMIT,
+    }
+
+
+@app.post("/admin/api/users/{tg_id}/grant")
+def admin_grant_subscription(tg_id: int, request: Request, body: dict = Body(...)):
+    require_admin(request)
+    node_code = body.get("node")
+    plan_code = body.get("plan")
+    node = db.get_node(node_code)
+    plan = PLANS_BY_CODE.get(plan_code)
+    if not node or not plan:
+        raise HTTPException(400, "unknown node or plan")
+    db.get_or_create_user(tg_id, None)
+    sub = db.create_subscription(tg_id, node_code, plan["days"], plan_code, source="admin")
+    xray_manager.add_client_to_node(node, sub["uuid"], email=sub["uuid"])
+    return sub
+
+
 @app.get("/admin/api/users/{tg_id}/devices")
 def admin_list_devices(tg_id: int, request: Request):
     require_admin(request)

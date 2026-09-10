@@ -230,6 +230,12 @@
     opacity: 0; transform: translateY(10px) scale(0.98); filter: blur(4px);
     transition: opacity 0.2s var(--ease), transform 0.2s var(--ease), filter 0.2s var(--ease);
   }
+  .modal-card-lg { max-width: 620px; }
+  .uc-sub-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px;
+    font-size: 13.5px;
+  }
   .modal-overlay.show .modal-card { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
   .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
   .modal-head h2 { font-size: 16px; margin: 0; font-weight: 600; }
@@ -419,18 +425,34 @@
     </div>
 
     <div id="devices-overlay" class="modal-overlay" onclick="if(event.target===this) closeDevices()">
-      <div class="modal-card">
+      <div class="modal-card modal-card-lg">
         <div class="modal-head">
-          <h2 id="devices-title">Устройства</h2>
+          <h2 id="devices-title">Карточка юзера</h2>
           <button class="modal-close" onclick="closeDevices()">&times;</button>
         </div>
-        <div id="devices-list" class="devices-list"></div>
-        <label class="f">Лимит устройств для этого юзера</label>
-        <input type="text" id="devices-limit" placeholder="по умолчанию">
-        <p class="page-sub" id="devices-limit-hint" style="margin:6px 0 0"></p>
-        <div class="modal-actions">
-          <button class="btn ghost" onclick="closeDevices()">Закрыть</button>
-          <button class="btn" onclick="saveHwidLimit()">Сохранить лимит</button>
+
+        <div class="tabs">
+          <div class="tab active" data-uc-tab="subs" onclick="switchUserTab('subs')">Подписки</div>
+          <div class="tab" data-uc-tab="devices" onclick="switchUserTab('devices')">Устройства</div>
+        </div>
+
+        <div id="uc-tab-subs">
+          <div id="uc-subs-list" class="devices-list"></div>
+          <div class="form-row" style="margin-top:6px">
+            <div><label class="f">Сервер</label><div id="uc-grant-node" class="dd"></div></div>
+            <div><label class="f">Срок</label><div id="uc-grant-plan" class="dd"></div></div>
+            <div style="flex:0"><label class="f">&nbsp;</label><button class="btn" onclick="grantSubscription()">Выдать</button></div>
+          </div>
+        </div>
+
+        <div id="uc-tab-devices" style="display:none">
+          <div id="devices-list" class="devices-list"></div>
+          <label class="f">Лимит устройств для этого юзера</label>
+          <input type="text" id="devices-limit" placeholder="по умолчанию">
+          <p class="page-sub" id="devices-limit-hint" style="margin:6px 0 0"></p>
+          <div class="modal-actions">
+            <button class="btn" onclick="saveHwidLimit()">Сохранить лимит</button>
+          </div>
         </div>
       </div>
     </div>
@@ -660,6 +682,8 @@ function initDropdowns() {
       if (c) document.getElementById("edit-label").value = `${flagEmoji(code)} ${c[1]}`;
     },
   });
+  DD.ucGrantNode = createDropdown("uc-grant-node", { options: [], placeholder: "Сервер" });
+  DD.ucGrantPlan = createDropdown("uc-grant-plan", { options: [], placeholder: "Срок" });
 }
 
 const ICONS = {
@@ -745,25 +769,56 @@ async function loadSubscriptions() {
     <tr><td>${s.username ? "@" + esc(s.username) : "tg" + s.tg_id}</td><td>${esc(s.node_label)}</td><td>${esc(s.plan_label)}</td>
     <td>${fmtDate(s.created_at)}</td><td>${fmtDate(s.expires_at)}</td><td>${statusBadge(s.active, s.days_left)}</td>
     <td>
-      <button class="muted-btn" onclick="openDevices(${s.tg_id}, '${esc(s.username ? '@' + s.username : 'tg' + s.tg_id)}')">Устройства</button>
+      <button class="muted-btn" onclick="openUserCard(${s.tg_id}, '${esc(s.username ? '@' + s.username : 'tg' + s.tg_id)}')">Карточка</button>
       ${s.active ? `<button class="muted-btn" onclick="revokeSub('${s.uuid}')">Отозвать</button>` : ""}
     </td></tr>
   `).join("") : '<tr><td colspan="7"><div class="empty">Пока нет подписок</div></td></tr>';
 }
 
 let devicesTgId = null;
-async function openDevices(tgId, label) {
+async function openUserCard(tgId, label) {
   devicesTgId = tgId;
-  document.getElementById("devices-title").textContent = `Устройства: ${label}`;
-  document.getElementById("devices-list").innerHTML = '<div class="empty">Загрузка…</div>';
+  document.getElementById("devices-title").textContent = `Карточка: ${label}`;
+  document.getElementById("uc-subs-list").innerHTML = '<div class="empty">Загрузка…</div>';
+  document.getElementById("devices-list").innerHTML = "";
+  switchUserTab("subs");
   document.getElementById("devices-overlay").classList.add("show");
-  const data = await api(`/admin/api/users/${tgId}/devices`);
-  document.getElementById("devices-limit").value = data.limit || "";
-  document.getElementById("devices-limit-hint").textContent = `По умолчанию (если пусто): ${data.fallback_limit}`;
+  if (!plansCache) plansCache = await api("/admin/api/plans");
+  if (!nodesCache) nodesCache = await api("/admin/api/nodes");
+  DD.ucGrantNode.setOptions(nodesCache.filter((n) => n.enabled).map((n) => ({ value: n.code, label: n.label })));
+  DD.ucGrantPlan.setOptions(plansCache.map((p) => ({ value: p.code, label: p.label })));
+  const data = await api(`/admin/api/users/${tgId}`);
+  document.getElementById("devices-limit").value = data.hwid_limit || "";
+  document.getElementById("devices-limit-hint").textContent = `По умолчанию (если пусто): ${data.hwid_fallback_limit}`;
+  renderUcSubs(data.subscriptions);
   renderDevices(data.devices);
 }
 function closeDevices() {
   document.getElementById("devices-overlay").classList.remove("show");
+}
+function switchUserTab(tab) {
+  document.querySelectorAll("[data-uc-tab]").forEach((t) => t.classList.toggle("active", t.dataset.ucTab === tab));
+  document.getElementById("uc-tab-subs").style.display = tab === "subs" ? "block" : "none";
+  document.getElementById("uc-tab-devices").style.display = tab === "devices" ? "block" : "none";
+}
+function renderUcSubs(subs) {
+  const list = document.getElementById("uc-subs-list");
+  list.innerHTML = subs.length ? subs.map((s) => `
+    <div class="uc-sub-row">
+      <div>
+        <div>${esc(s.node_label)} — ${esc(s.plan_label)}</div>
+        <div class="page-sub" style="margin:2px 0 0">до ${fmtDate(s.expires_at)} · ${statusBadge(s.active, s.days_left)}</div>
+      </div>
+      ${s.active ? `<button class="muted-btn" onclick="revokeSub('${s.uuid}'); openUserCard(devicesTgId, document.getElementById('devices-title').textContent.replace('Карточка: ',''))">Отозвать</button>` : ""}
+    </div>
+  `).join("") : '<div class="empty">Пока нет подписок</div>';
+}
+async function grantSubscription() {
+  const node = DD.ucGrantNode.getValue();
+  const plan = DD.ucGrantPlan.getValue();
+  if (!node || !plan) return;
+  await api(`/admin/api/users/${devicesTgId}/grant`, { method: "POST", body: JSON.stringify({ node, plan }) });
+  openUserCard(devicesTgId, document.getElementById("devices-title").textContent.replace("Карточка: ", ""));
 }
 function renderDevices(devices) {
   const list = document.getElementById("devices-list");
@@ -779,13 +834,12 @@ function renderDevices(devices) {
 }
 async function deleteDevice(deviceId) {
   await api(`/admin/api/users/${devicesTgId}/devices/${deviceId}`, { method: "DELETE" });
-  const data = await api(`/admin/api/users/${devicesTgId}/devices`);
+  const data = await api(`/admin/api/users/${devicesTgId}`);
   renderDevices(data.devices);
 }
 async function saveHwidLimit() {
   const val = document.getElementById("devices-limit").value.trim();
   await api(`/admin/api/users/${devicesTgId}/hwid-limit`, { method: "POST", body: JSON.stringify({ limit: val || null }) });
-  closeDevices();
 }
 
 async function revokeSub(uuid) {
