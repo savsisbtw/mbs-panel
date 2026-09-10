@@ -81,8 +81,13 @@ cmd_update() {
     venv/bin/pip install --quiet -r requirements.txt
     return 1
   fi
+  echo "обновляю сам CLI..."
+  cp "$APP_DIR/mbs" /usr/local/bin/mbs
+  chmod +x /usr/local/bin/mbs
+
   echo "перезапускаю..."
-  systemctl restart mbs-bot mbs-api
+  systemctl restart mbs-bot mbs-api xray
+  systemctl reload nginx 2>/dev/null || true
   sleep 2
   if systemctl is-active --quiet mbs-bot && systemctl is-active --quiet mbs-api; then
     echo "обновлено: $before -> $(git rev-parse --short HEAD)"
