@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MBS Panel — Публичная оферта</title>
+<style>
+  :root {
+    --bg: #0a0b0f; --card: #131519; --border: #1e2128;
+    --text: #eceef2; --muted: #868c99; --accent: #7c6cf0;
+    --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased; line-height: 1.6;
+  }
+  a { color: var(--accent); }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 48px 24px 80px; }
+  .back { color: var(--muted); text-decoration: none; font-size: 14px; }
+  .back:hover { color: var(--text); }
+  h1 { font-size: 26px; margin: 24px 0 6px; letter-spacing: -0.02em; }
+  .updated { color: var(--muted); font-size: 13px; margin-bottom: 36px; }
+  h2 { font-size: 17px; margin: 36px 0 10px; font-weight: 600; }
+  p, li { color: var(--text); font-size: 14.5px; }
+  .muted { color: var(--muted); }
+  .fill { color: var(--accent); background: rgba(124,108,240,0.1); padding: 1px 5px; border-radius: 4px; }
+  ol { padding-left: 20px; }
+  li { margin-bottom: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="/">← На главную</a>
+  <h1>Публичная оферта</h1>
+  <p class="updated">Действует с <span class="fill">[дата]</span></p>
+
+  <p>Настоящий документ является публичной офертой <span class="fill">[ФИО ИП / наименование самозанятого или юрлица]</span>, <span class="fill">[ИНН]</span> (далее — «Исполнитель»), адресованной любому дееспособному физическому лицу (далее — «Клиент»), на заключение договора о предоставлении доступа к VPN-сервису на условиях, указанных ниже. Оплата услуги означает полное и безоговорочное принятие условий оферты (акцепт).</p>
+
+  <h2>1. Предмет договора</h2>
+  <p>Исполнитель предоставляет Клиенту доступ к серверу VPN (VLESS/Hysteria2) на срок, соответствующий выбранному тарифу, через Telegram-бота <span class="fill">[@ваш_бот]</span>. Доступ выдаётся автоматически после подтверждения оплаты.</p>
+
+  <h2>2. Стоимость и порядок оплаты</h2>
+  <ol>
+    <li>Стоимость тарифов указана в боте на момент оформления и может изменяться Исполнителем в одностороннем порядке — уже оплаченные периоды это не затрагивает.</li>
+    <li>Оплата принимается через платёжных провайдеров ЮKassa / Platega банковской картой или СБП. Реквизиты карты Исполнителю не передаются и не хранятся — оплата проходит на стороне провайдера.</li>
+    <li>Доступ активируется автоматически в течение нескольких минут после поступления подтверждения оплаты от провайдера.</li>
+  </ol>
+
+  <h2>3. Срок действия и продление</h2>
+  <p>Доступ предоставляется на срок выбранного тарифа (от 7 дней до 1 года) и автоматически прекращается по истечении срока. Продление — отдельной оплатой, автосписание не производится.</p>
+
+  <h2>4. Возврат средств</h2>
+  <p>Возврат возможен в течение <span class="fill">[N]</span> часов с момента оплаты, если доступ ни разу не был использован (не было подключений к серверу), — по обращению в поддержку <span class="fill">[контакт]</span>. После начала использования услуга считается оказанной.</p>
+
+  <h2>5. Права и обязанности сторон</h2>
+  <ol>
+    <li>Клиент обязуется не использовать доступ для рассылки спама, DDoS-атак, распространения вредоносного ПО и иной деятельности, запрещённой законодательством РФ.</li>
+    <li>Исполнитель вправе приостановить доступ Клиента при нарушении п. 5.1 без возврата средств.</li>
+    <li>Исполнитель не гарантирует бесперебойную работу сервиса на 100% времени — возможны технические перерывы для обслуживания.</li>
+  </ol>
+
+  <h2>6. Реквизиты Исполнителя</h2>
+  <p class="muted">
+    <span class="fill">[ФИО / наименование]</span><br>
+    ИНН <span class="fill">[номер]</span><br>
+    Email: <span class="fill">[email]</span><br>
+    Telegram: <span class="fill">[контакт поддержки]</span>
+  </p>
+</div>
+</body>
+</html>

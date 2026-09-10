@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MBS Panel — Политика конфиденциальности</title>
+<style>
+  :root {
+    --bg: #0a0b0f; --card: #131519; --border: #1e2128;
+    --text: #eceef2; --muted: #868c99; --accent: #7c6cf0;
+    --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased; line-height: 1.6;
+  }
+  a { color: var(--accent); }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 48px 24px 80px; }
+  .back { color: var(--muted); text-decoration: none; font-size: 14px; }
+  .back:hover { color: var(--text); }
+  h1 { font-size: 26px; margin: 24px 0 6px; letter-spacing: -0.02em; }
+  .updated { color: var(--muted); font-size: 13px; margin-bottom: 36px; }
+  h2 { font-size: 17px; margin: 36px 0 10px; font-weight: 600; }
+  p, li { color: var(--text); font-size: 14.5px; }
+  .muted { color: var(--muted); }
+  .fill { color: var(--accent); background: rgba(124,108,240,0.1); padding: 1px 5px; border-radius: 4px; }
+  ol, ul { padding-left: 20px; }
+  li { margin-bottom: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="/">← На главную</a>
+  <h1>Политика конфиденциальности</h1>
+  <p class="updated">Действует с <span class="fill">[дата]</span></p>
+
+  <p>Настоящая политика описывает, какие данные собирает и как обрабатывает <span class="fill">[ФИО ИП / наименование]</span> (далее — «Оператор») при использовании Telegram-бота и сайта MBS Panel.</p>
+
+  <h2>1. Какие данные собираются</h2>
+  <ul>
+    <li>Telegram ID и username — для выдачи и учёта подписки, идентификации в боте.</li>
+    <li>Технический идентификатор VPN-клиента (UUID) — для настройки доступа на сервере, без привязки к личности.</li>
+    <li>Данные об оплате (сумма, статус, дата, идентификатор транзакции платёжного провайдера) — реквизиты карты Оператору не передаются и не хранятся, это зона ответственности ЮKassa/Platega.</li>
+    <li>IP-адрес — временно, только для защиты от злоупотреблений (рейт-лимиты), не сохраняется в привязке к трафику пользователя.</li>
+  </ul>
+  <p class="muted">Оператор не собирает и не хранит журнал посещаемых через VPN сайтов и не ведёт логи трафика клиентов.</p>
+
+  <h2>2. Цели обработки</h2>
+  <ul>
+    <li>Предоставление и продление доступа к VPN-сервису.</li>
+    <li>Обработка оплаты и подтверждение транзакций.</li>
+    <li>Связь с пользователем по вопросам работы сервиса.</li>
+  </ul>
+
+  <h2>3. Хранение и передача третьим лицам</h2>
+  <p>Данные хранятся на серверах Оператора и не передаются третьим лицам, кроме платёжных провайдеров (ЮKassa, Platega) в объёме, необходимом для обработки оплаты, и в случаях, прямо предусмотренных законодательством РФ.</p>
+
+  <h2>4. Права пользователя</h2>
+  <p>Пользователь вправе запросить удаление своих данных и прекращение обработки, обратившись на <span class="fill">[email/контакт поддержки]</span>. Удаление данных влечёт прекращение доступа к активным подпискам.</p>
+
+  <h2>5. Контакты</h2>
+  <p class="muted">
+    <span class="fill">[ФИО / наименование]</span><br>
+    Email: <span class="fill">[email]</span><br>
+    Telegram: <span class="fill">[контакт поддержки]</span>
+  </p>
+</div>
+</body>
+</html>
