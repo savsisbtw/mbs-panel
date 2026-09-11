@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import json
 import os
@@ -241,16 +242,15 @@ def get_subscription(token: str, request: Request):
         hwid = request.headers.get("x-hwid", "")
         if not HWID_RE.match(hwid):
             raise HTTPException(404, "hwid required")
-        if not db.get_device(user["tg_id"], hwid):
-            limit = user["hwid_limit"] or HWID_FALLBACK_LIMIT
-            if db.count_devices(user["tg_id"]) >= limit:
-                raise HTTPException(404, "device limit reached", headers={"x-hwid-max-devices-reached": "true"})
-            db.add_device(
-                user["tg_id"], hwid,
-                request.headers.get("x-device-os"),
-                request.headers.get("x-device-model"),
-                ua,
-            )
+        limit = user["hwid_limit"] if user["hwid_limit"] is not None else HWID_FALLBACK_LIMIT
+        _, allowed = db.add_device_if_under_limit(
+            user["tg_id"], hwid, limit,
+            request.headers.get("x-device-os"),
+            request.headers.get("x-device-model"),
+            ua,
+        )
+        if not allowed:
+            raise HTTPException(404, "device limit reached", headers={"x-hwid-max-devices-reached": "true"})
 
     content = links.build_subscription_text(subs)
     return Response(content=content, media_type="text/plain")
@@ -305,12 +305,15 @@ def _tg_send_message(tg_id: int, text: str):
 
 
 def _grant_paid_subscription(payment_id: str):
-    payment = db.mark_payment_paid(payment_id)
-    if not payment:
+    payment = db.get_payment(payment_id)
+    if not payment or payment["status"] == "paid":
         return
     plan = PLANS_BY_CODE.get(payment["plan"])
     node = db.get_node(payment["node"])
     if not plan or not node:
+        return
+    payment = db.mark_payment_paid(payment_id)
+    if not payment:
         return
     sub = db.create_subscription(payment["tg_id"], payment["node"], plan["days"], payment["plan"], source="payment")
     xray_manager.add_client_to_node(node, sub["uuid"], email=sub["uuid"])
@@ -343,9 +346,10 @@ def _check_and_reconcile_payment(payment: dict) -> str:
 @app.get("/admin/api/payments")
 def admin_list_payments(request: Request):
     require_admin(request)
+    nodes_by_code = {n["code"]: n for n in db.list_nodes()}
     out = []
     for p in db.list_payments():
-        node = db.get_node(p["node"])
+        node = nodes_by_code.get(p["node"])
         plan = PLANS_BY_CODE.get(p["plan"])
         out.append({
             **p,
@@ -374,12 +378,16 @@ async def yookassa_webhook(request: Request):
     if not payments.verify_yookassa_notification(body):
         raise HTTPException(400, "unexpected event")
     obj = body.get("object", {})
-    if obj.get("status") != "succeeded":
-        return {"ok": True}
     payment_id = (obj.get("metadata") or {}).get("payment_id")
     if not payment_id:
         raise HTTPException(400, "missing payment_id")
-    _grant_paid_subscription(payment_id)
+    payment = db.get_payment(payment_id)
+    if not payment or not payment.get("external_id"):
+        raise HTTPException(400, "unknown payment")
+    status = await asyncio.to_thread(payments.check_yookassa_payment, payment["external_id"])
+    if status not in payments.PAID_STATUSES:
+        return {"ok": True}
+    await asyncio.to_thread(_grant_paid_subscription, payment_id)
     return {"ok": True}
 
 
@@ -394,7 +402,7 @@ async def platega_webhook(request: Request):
     payment_id = body.get("id") or body.get("paymentId")
     if status not in ("succeeded", "success", "paid") or not payment_id:
         return {"ok": True}
-    _grant_paid_subscription(payment_id)
+    await asyncio.to_thread(_grant_paid_subscription, payment_id)
     return {"ok": True}
 
 
@@ -519,12 +527,13 @@ def admin_traffic(request: Request):
     total_down = sum(v["down"] for v in all_stats.values())
 
     subs = db.list_all_subscriptions(limit=5000)
+    nodes_by_code = {n["code"]: n for n in db.list_nodes()}
     per_sub = []
     for s in subs:
         st = all_stats.get(s["uuid"])
         if not st:
             continue
-        node = db.get_node(s["node"])
+        node = nodes_by_code.get(s["node"])
         per_sub.append({
             "uuid": s["uuid"],
             "username": ("@" + s["username"]) if s.get("username") else f"tg{s['tg_id']}",
@@ -544,12 +553,13 @@ def admin_traffic(request: Request):
 
 
 @app.get("/admin/api/subscriptions")
-def admin_subscriptions(request: Request):
+def admin_subscriptions(request: Request, limit: int = 200):
     require_admin(request)
-    subs = db.list_all_subscriptions()
+    subs = db.list_all_subscriptions(limit=limit)
+    nodes_by_code = {n["code"]: n for n in db.list_nodes()}
     out = []
     for s in subs:
-        node = db.get_node(s["node"])
+        node = nodes_by_code.get(s["node"])
         plan = PLANS_BY_CODE.get(s["plan"])
         out.append({
             **s,
@@ -563,8 +573,7 @@ def admin_subscriptions(request: Request):
 @app.post("/admin/api/subscriptions/{uuid}/revoke")
 def admin_revoke_subscription(uuid: str, request: Request):
     require_admin(request)
-    subs = db.list_all_subscriptions(limit=5000)
-    sub = next((s for s in subs if s["uuid"] == uuid), None)
+    sub = db.get_subscription(uuid)
     if not sub:
         raise HTTPException(404, "not found")
     node = db.get_node(sub["node"])
@@ -577,8 +586,7 @@ def admin_revoke_subscription(uuid: str, request: Request):
 @app.post("/admin/api/subscriptions/{uuid}/reset-traffic")
 def admin_reset_traffic(uuid: str, request: Request):
     require_admin(request)
-    subs = db.list_all_subscriptions(limit=5000)
-    sub = next((s for s in subs if s["uuid"] == uuid), None)
+    sub = db.get_subscription(uuid)
     if not sub:
         raise HTTPException(404, "not found")
     node = db.get_node(sub["node"])
@@ -595,9 +603,10 @@ def admin_user_card(tg_id: int, request: Request):
     if not user:
         raise HTTPException(404, "not found")
     subs = db.list_subscriptions_for_user(tg_id)
+    nodes_by_code = {n["code"]: n for n in db.list_nodes()}
     out_subs = []
     for s in subs:
-        node = db.get_node(s["node"])
+        node = nodes_by_code.get(s["node"])
         plan = PLANS_BY_CODE.get(s["plan"])
         out_subs.append({
             **s,
@@ -662,9 +671,10 @@ def admin_set_hwid_limit(tg_id: int, request: Request, body: dict = Body(...)):
 def admin_gift_codes(request: Request):
     require_admin(request)
     codes = db.list_gift_codes()
+    nodes_by_code = {n["code"]: n for n in db.list_nodes()}
     out = []
     for c in codes:
-        node = db.get_node(c["node"])
+        node = nodes_by_code.get(c["node"])
         plan = PLANS_BY_CODE.get(c["plan"])
         out.append({
             **c,

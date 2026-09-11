@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import secrets
 import datetime
@@ -145,6 +146,13 @@ def init_db():
         conn.executescript(SCHEMA)
     _migrate()
     _seed_local_node()
+    for suffix in ("", "-wal", "-shm"):
+        path = DB_PATH + suffix
+        if os.path.exists(path):
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
 
 
 def _seed_local_node():
@@ -231,6 +239,12 @@ def delete_node(code: str):
     if code == "de1":
         raise ValueError("cannot delete the local node")
     with get_conn() as conn:
+        active = conn.execute(
+            "SELECT COUNT(*) c FROM subscriptions WHERE node=? AND active=1 AND expires_at>?",
+            (code, now_iso()),
+        ).fetchone()["c"]
+        if active:
+            raise ValueError(f"node has {active} active subscriptions, revoke them first")
         conn.execute("DELETE FROM nodes WHERE code=?", (code,))
 
 
@@ -360,6 +374,16 @@ def revoke_subscription(client_uuid: str):
         conn.execute("UPDATE subscriptions SET active=0 WHERE uuid=?", (client_uuid,))
 
 
+def get_subscription(client_uuid: str):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT s.*, u.username FROM subscriptions s "
+            "LEFT JOIN users u ON u.tg_id = s.tg_id WHERE s.uuid=?",
+            (client_uuid,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
 def get_user(tg_id: int):
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM users WHERE tg_id=?", (tg_id,)).fetchone()
@@ -427,13 +451,12 @@ def set_payment_external(payment_id: str, external_id: str, pay_url: str):
 
 def mark_payment_paid(payment_id: str):
     with get_conn() as conn:
-        row = conn.execute("SELECT status FROM payments WHERE id=?", (payment_id,)).fetchone()
-        if not row or row["status"] == "paid":
-            return None
-        conn.execute(
-            "UPDATE payments SET status='paid', paid_at=? WHERE id=?",
+        cur = conn.execute(
+            "UPDATE payments SET status='paid', paid_at=? WHERE id=? AND status='pending'",
             (now_iso(), payment_id),
         )
+        if cur.rowcount == 0:
+            return None
     return get_payment(payment_id)
 
 
@@ -481,6 +504,23 @@ def add_device(tg_id: int, hwid: str, device_os: str | None, device_model: str |
             (tg_id, hwid, device_os, device_model, user_agent, now_iso()),
         )
     return get_device(tg_id, hwid)
+
+
+def add_device_if_under_limit(tg_id: int, hwid: str, limit: int, device_os: str | None, device_model: str | None, user_agent: str | None):
+    with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute("SELECT * FROM devices WHERE tg_id=? AND hwid=?", (tg_id, hwid)).fetchone()
+        if existing:
+            return dict(existing), True
+        count = conn.execute("SELECT COUNT(*) c FROM devices WHERE tg_id=?", (tg_id,)).fetchone()["c"]
+        if count >= limit:
+            return None, False
+        conn.execute(
+            "INSERT INTO devices (tg_id, hwid, device_os, device_model, user_agent, first_seen) VALUES (?,?,?,?,?,?)",
+            (tg_id, hwid, device_os, device_model, user_agent, now_iso()),
+        )
+        row = conn.execute("SELECT * FROM devices WHERE tg_id=? AND hwid=?", (tg_id, hwid)).fetchone()
+        return dict(row), True
 
 
 def delete_device(device_id: int):

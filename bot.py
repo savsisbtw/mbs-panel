@@ -96,10 +96,13 @@ async def start_deeplink(message: Message, command: CommandObject):
         if err == "already_used":
             await message.answer("Этот код уже был использован.")
             return await send_main_menu(message)
-        plan = PLANS_BY_CODE[gift["plan"]]
-        sub = db.create_subscription(message.from_user.id, gift["node"], plan["days"], plan["code"], source="gift", )
+        plan = PLANS_BY_CODE.get(gift["plan"])
         gift_node = db.get_node(gift["node"])
-        xray_manager.add_client_to_node(gift_node, sub["uuid"], email=sub["uuid"])
+        if not plan or not gift_node:
+            await message.answer("Этот подарок больше недоступен.")
+            return await send_main_menu(message)
+        sub = db.create_subscription(message.from_user.id, gift["node"], plan["days"], plan["code"], source="gift", )
+        await asyncio.to_thread(xray_manager.add_client_to_node, gift_node, sub["uuid"], email=sub["uuid"])
         await message.answer(
             f"<b>Подарок активирован</b>\n\n"
             f"Сервер: {gift_node['label']}\n"
@@ -171,7 +174,7 @@ async def cb_plan(cb: CallbackQuery):
     user = db.get_or_create_user(cb.from_user.id, cb.from_user.username)
     sub = db.create_subscription(cb.from_user.id, node_code, plan["days"], plan_code, source="bot")
     node_row = db.get_node(node_code)
-    xray_manager.add_client_to_node(node_row, sub["uuid"], email=sub["uuid"])
+    await asyncio.to_thread(xray_manager.add_client_to_node, node_row, sub["uuid"], email=sub["uuid"])
     kb = connect_kb(user["token"], extra_rows=[
         [InlineKeyboardButton(text="Моя подписка", callback_data="menu:mysub")],
         [InlineKeyboardButton(text="В меню", callback_data="menu:main")],
@@ -309,7 +312,7 @@ async def cb_admin_stats(cb: CallbackQuery):
 async def cb_admin_sync(cb: CallbackQuery):
     if not is_admin(cb.from_user.id):
         return await cb.answer("Нет доступа", show_alert=True)
-    result = xray_manager.sync_all()
+    result = await asyncio.to_thread(xray_manager.sync_all)
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="В админку", callback_data="menu:admin")]])
     await cb.message.edit_text(
         f"Синхронизация xray выполнена.\nАктивно клиентов: {result['active_now']}\n"
@@ -326,19 +329,19 @@ async def reconcile_pending_payments():
         if payment["status"] != "pending" or not payment.get("external_id"):
             continue
         try:
-            status = payments.check_payment_status(payment["provider"], payment["external_id"])
+            status = await asyncio.to_thread(payments.check_payment_status, payment["provider"], payment["external_id"])
         except Exception:
             continue
         if status in payments.PAID_STATUSES:
-            granted = db.mark_payment_paid(payment["id"])
-            if not granted:
-                continue
             plan = PLANS_BY_CODE.get(payment["plan"])
             node_row = db.get_node(payment["node"])
             if not plan or not node_row:
                 continue
+            granted = db.mark_payment_paid(payment["id"])
+            if not granted:
+                continue
             sub = db.create_subscription(payment["tg_id"], payment["node"], plan["days"], payment["plan"], source="payment")
-            xray_manager.add_client_to_node(node_row, sub["uuid"], email=sub["uuid"])
+            await asyncio.to_thread(xray_manager.add_client_to_node, node_row, sub["uuid"], email=sub["uuid"])
             user = db.get_or_create_user(payment["tg_id"], None)
             try:
                 await bot.send_message(
@@ -357,7 +360,7 @@ async def reconcile_pending_payments():
 async def periodic_sync():
     while True:
         try:
-            xray_manager.sync_all()
+            await asyncio.to_thread(xray_manager.sync_all)
         except Exception:
             log.exception("periodic sync failed")
         try:

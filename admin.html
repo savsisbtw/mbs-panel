@@ -873,11 +873,6 @@ function statusBadge(active, daysLeft) {
   if (daysLeft <= 2) return '<span class="badge warn">' + daysLeft + ' дн.</span>';
   return '<span class="badge ok">' + daysLeft + ' дн.</span>';
 }
-function staggerReveal(container) {
-  const items = container.querySelectorAll(".reveal");
-  items.forEach((el, i) => { el.style.animationDelay = (i * 0.04) + "s"; });
-}
-
 async function loadDashboard() {
   const stats = await api("/admin/api/stats");
   const grid = document.getElementById("stat-grid");
@@ -888,9 +883,8 @@ async function loadDashboard() {
     ["Гифт-коды (созд./исп.)", stats.gifts_created + " / " + stats.gifts_used, "var(--pink)", ICONS.gift],
   ].map(([l, v, c, ic], i) => statCard(l, v, c, ic, i * 0.05)).join("");
 
-  const subs = await api("/admin/api/subscriptions");
+  const recent = await api("/admin/api/subscriptions?limit=8");
   const body = document.getElementById("recent-subs-body");
-  const recent = subs.slice(0, 8);
   body.innerHTML = recent.length ? recent.map((s, i) => `
     <tr ${rowAttr(i)}><td>${s.username ? "@" + esc(s.username) : "tg" + s.tg_id}</td><td>${esc(s.node_label)}</td><td>${esc(s.plan_label)}</td>
     <td>${fmtDate(s.expires_at)}</td><td>${statusBadge(s.active, s.days_left)}</td></tr>

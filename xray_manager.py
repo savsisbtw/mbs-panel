@@ -75,15 +75,6 @@ def remove_client(client_uuid: str):
             _reload_xray()
 
 
-def list_client_ids():
-    with _locked():
-        cfg = _load()
-        ids = set()
-        for ib in _local_inbounds(cfg):
-            ids |= {c["id"] for c in ib["settings"]["clients"]}
-        return ids
-
-
 def sync_from_db():
     import db as dbmod
 

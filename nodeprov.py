@@ -8,6 +8,7 @@ import paramiko
 from config import PANEL_DOMAIN
 
 MGMT_KEY_PATH = "/root/.ssh/mbs_nodes_ed25519"
+MGMT_KNOWN_HOSTS_PATH = "/root/.ssh/mbs_nodes_known_hosts"
 LOCAL_TAGS = {"vless-tcp-reality", "vless-grpc-reality", "vless-xhttp-reality", "vless-ws-tls"}
 TAG_FLOW = {"vless-tcp-reality": "xtls-rprx-vision"}
 
@@ -238,9 +239,14 @@ def render_install_script(node: dict) -> str:
 
 def _mgmt_connect(address: str, ssh_port: int = 22) -> paramiko.SSHClient:
     client = paramiko.SSHClient()
+    try:
+        client.load_host_keys(MGMT_KNOWN_HOSTS_PATH)
+    except IOError:
+        pass
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     key = paramiko.Ed25519Key.from_private_key_file(MGMT_KEY_PATH)
     client.connect(address, port=ssh_port, username="root", pkey=key, timeout=15, banner_timeout=15, auth_timeout=15)
+    client.save_host_keys(MGMT_KNOWN_HOSTS_PATH)
     return client
 
 
