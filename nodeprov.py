@@ -17,9 +17,18 @@ CERTBOT_SNIPPET = """echo "issuing a real TLS cert for {address} (needed for WS+
 command -v certbot >/dev/null 2>&1 || apt-get install -y certbot
 ss -ltnp | grep -q ':80 ' && {{ echo "something is already on port 80, stop it first"; exit 1; }}
 certbot certonly --standalone --non-interactive --agree-tos --register-unsafely-without-email -d {address}
+mkdir -p /etc/xray/certs
+cp /etc/letsencrypt/live/{address}/fullchain.pem /etc/xray/certs/node.crt
+cp /etc/letsencrypt/live/{address}/privkey.pem /etc/xray/certs/node.key
+chmod 644 /etc/xray/certs/node.crt /etc/xray/certs/node.key
+chown nobody:nogroup /etc/xray/certs/node.crt /etc/xray/certs/node.key
 mkdir -p /etc/letsencrypt/renewal-hooks/deploy
-cat > /etc/letsencrypt/renewal-hooks/deploy/mbs-restart-xray.sh << 'HOOK'
+cat > /etc/letsencrypt/renewal-hooks/deploy/mbs-restart-xray.sh << HOOK
 #!/bin/bash
+cp /etc/letsencrypt/live/{address}/fullchain.pem /etc/xray/certs/node.crt
+cp /etc/letsencrypt/live/{address}/privkey.pem /etc/xray/certs/node.key
+chmod 644 /etc/xray/certs/node.crt /etc/xray/certs/node.key
+chown nobody:nogroup /etc/xray/certs/node.crt /etc/xray/certs/node.key
 systemctl restart xray || true
 HOOK
 chmod +x /etc/letsencrypt/renewal-hooks/deploy/mbs-restart-xray.sh
@@ -185,8 +194,8 @@ def _build_config_json(transports, private_key, address):
         elif t["security"] == "tls":
             ib["streamSettings"] = {"network": "ws", "security": "tls", "wsSettings": {"path": t["path"]},
                 "tlsSettings": {"certificates": [{
-                    "certificateFile": f"/etc/letsencrypt/live/{address}/fullchain.pem",
-                    "keyFile": f"/etc/letsencrypt/live/{address}/privkey.pem",
+                    "certificateFile": "/etc/xray/certs/node.crt",
+                    "keyFile": "/etc/xray/certs/node.key",
                 }]}}
         inbounds.append(ib)
 

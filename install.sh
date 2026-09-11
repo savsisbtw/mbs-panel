@@ -156,9 +156,22 @@ retry certbot certonly --webroot -w "$WEBROOT" --non-interactive --agree-tos \
 retry certbot certonly --webroot -w "$WEBROOT" --non-interactive --agree-tos \
   --register-unsafely-without-email -d "$DE1_ADDRESS"
 
+echo "готовлю серт для xray (он не root, letsencrypt/live ему не почитать)..."
+mkdir -p /etc/xray/certs
+cp "/etc/letsencrypt/live/$DE1_ADDRESS/fullchain.pem" /etc/xray/certs/de1.crt
+cp "/etc/letsencrypt/live/$DE1_ADDRESS/privkey.pem" /etc/xray/certs/de1.key
+chmod 644 /etc/xray/certs/de1.crt /etc/xray/certs/de1.key
+chown nobody:nogroup /etc/xray/certs/de1.crt /etc/xray/certs/de1.key
+
 mkdir -p /etc/letsencrypt/renewal-hooks/deploy
-cat > /etc/letsencrypt/renewal-hooks/deploy/mbs-reload.sh << 'HOOKEOF'
+cat > /etc/letsencrypt/renewal-hooks/deploy/mbs-reload.sh << HOOKEOF
 #!/bin/bash
+if [ -d "/etc/letsencrypt/live/$DE1_ADDRESS" ]; then
+  cp "/etc/letsencrypt/live/$DE1_ADDRESS/fullchain.pem" /etc/xray/certs/de1.crt
+  cp "/etc/letsencrypt/live/$DE1_ADDRESS/privkey.pem" /etc/xray/certs/de1.key
+  chmod 644 /etc/xray/certs/de1.crt /etc/xray/certs/de1.key
+  chown nobody:nogroup /etc/xray/certs/de1.crt /etc/xray/certs/de1.key
+fi
 systemctl reload nginx || true
 systemctl restart xray || true
 HOOKEOF
@@ -343,8 +356,8 @@ cat > /usr/local/etc/xray/config.json << XRAYEOF
         "wsSettings": { "path": "/mbs-ws" },
         "tlsSettings": {
           "certificates": [{
-            "certificateFile": "/etc/letsencrypt/live/$DE1_ADDRESS/fullchain.pem",
-            "keyFile": "/etc/letsencrypt/live/$DE1_ADDRESS/privkey.pem"
+            "certificateFile": "/etc/xray/certs/de1.crt",
+            "keyFile": "/etc/xray/certs/de1.key"
           }]
         }
       }
