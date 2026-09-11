@@ -2,6 +2,7 @@
 set -e
 set -o pipefail
 
+MIRROR_URL="https://api.savsis.xyz/git/mbs-panel.git/"
 REPO_URL="https://github.com/devsavsis/mbs-panel.git"
 APP_DIR="/opt/mbs-panel"
 WEBROOT="/var/www/certbot"
@@ -82,7 +83,12 @@ echo "клонируем репозиторий в $APP_DIR..."
 if [ -d "$APP_DIR/.git" ]; then
   retry git -C "$APP_DIR" pull --quiet
 else
-  retry git clone --quiet "$REPO_URL" "$APP_DIR"
+  if ! git clone --quiet "$MIRROR_URL" "$APP_DIR" 2>/dev/null; then
+    echo "зеркало недоступно, клонирую напрямую с GitHub..."
+    retry git clone --quiet "$REPO_URL" "$APP_DIR"
+    git -C "$APP_DIR" remote set-url origin "$MIRROR_URL"
+  fi
+  git -C "$APP_DIR" remote add github "$REPO_URL" 2>/dev/null || true
 fi
 
 cd "$APP_DIR"

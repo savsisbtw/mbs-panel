@@ -13,7 +13,7 @@ mbs — управление MBS Panel
   mbs restart               перезапустить всё (bot, api, xray, reload nginx)
   mbs logs [bot|api|xray]   последние строки лога (по умолчанию api)
   mbs domain                показать текущий домен панели
-  mbs update                обновить код с GitHub и перезапустить (не трогает .env и базу)
+  mbs update                обновить код (зеркало api.savsis.xyz, потом GitHub) и перезапустить (не трогает .env и базу)
 EOF
 }
 
@@ -58,17 +58,30 @@ cmd_domain() {
 cmd_update() {
   cd "$APP_DIR"
   echo "проверяю обновления..."
-  git fetch --quiet origin main
+  local remote="origin"
+  if ! git fetch --quiet origin main 2>/dev/null; then
+    if git remote | grep -q '^github$'; then
+      echo "зеркало недоступно, пробую github..."
+      if ! git fetch --quiet github main 2>/dev/null; then
+        echo "не удалось получить обновления ни с зеркала, ни с github"
+        return 1
+      fi
+      remote="github"
+    else
+      echo "не удалось получить обновления"
+      return 1
+    fi
+  fi
   local before after
   before=$(git rev-parse HEAD)
-  after=$(git rev-parse origin/main)
+  after=$(git rev-parse "$remote/main")
   if [ "$before" = "$after" ]; then
     echo "уже последняя версия ($before)."
     return 0
   fi
   echo "текущая: $before"
   echo "новая:   $after"
-  if ! git merge --ff-only origin/main --quiet; then
+  if ! git merge --ff-only "$remote/main" --quiet; then
     echo "не вышло быстро обновиться (похоже, файлы правились вручную на сервере) — разберись руками: git status"
     return 1
   fi
