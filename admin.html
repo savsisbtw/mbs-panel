@@ -535,6 +535,23 @@
         <p class="check-hint">Панель сама проверит токен у Telegram (запрос getMe) перед применением и подставит настоящий юзернейм бота — придумывать не нужно. После смены перезапустится только бот; если уведомления от api (например об оплате) продолжат идти со старого бота, выполни на сервере <code>mbs restart</code>.</p>
         <div id="settings-bot-result"></div>
       </div>
+
+      <div class="section" style="margin-top:20px">
+        <div class="section-head"><h2>Бэкап и восстановление</h2></div>
+        <p class="page-sub" style="margin-bottom:16px">Бэкап — это база (юзеры, подписки, ноды, платежи) и <code>.env</code> одним файлом. Держи копии где-то отдельно от сервера.</p>
+        <div class="form-row" style="align-items:flex-start">
+          <button class="btn" onclick="downloadBackup()">Скачать бэкап</button>
+        </div>
+        <div style="margin-top:20px;padding-top:20px;border-top:1px solid var(--border)">
+          <label class="f">Восстановить из файла</label>
+          <div class="form-row">
+            <input type="file" id="restore-file-input" accept=".gz,.tar.gz">
+            <div style="flex:0"><button class="btn" style="background:var(--red)" onclick="restoreBackup()">Восстановить</button></div>
+          </div>
+          <p class="check-hint">⚠ Заменяет текущую базу целиком. Перед заменой панель сама делает копию текущей базы на сервере (файл <code>.before-restore-...</code>), но проверь, что заливаешь именно тот файл, что нужно.</p>
+        </div>
+        <div id="backup-result"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -864,6 +881,31 @@ async function saveBotSettings() {
     loadBotSettings();
   } catch (e) {
     result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--red)">Не получилось — проверь токен и попробуй снова</p>';
+  }
+}
+
+function downloadBackup() {
+  window.location.href = "/admin/api/backup";
+}
+
+async function restoreBackup() {
+  const input = document.getElementById("restore-file-input");
+  const result = document.getElementById("backup-result");
+  const file = input.files[0];
+  if (!file) return;
+  if (!confirm("Заменить текущую базу файлом " + file.name + "? Текущая база сохранится в файл .before-restore-... на сервере, но действие лучше не отменять просто так.")) return;
+  result.innerHTML = '<p class="page-sub" style="margin-top:10px">Восстанавливаю…</p>';
+  try {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch("/admin/api/backup/restore", { method: "POST", body: form });
+    if (res.status === 401) { showLogin(); return; }
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    result.innerHTML = `<p class="page-sub" style="margin-top:10px;color:var(--green)">Готово. Копия старой базы: <code>${esc(data.safety_copy)}</code>.${data.restored_env ? (data.restarted_bot ? " Бот перезапущен с новым .env." : " .env восстановлен, но бот сам не перезапустился — выполни mbs restart.") : ""}</p>`;
+    input.value = "";
+  } catch (e) {
+    result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--red)">Не получилось: ' + esc(e.message) + '</p>';
   }
 }
 

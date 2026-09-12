@@ -5,11 +5,12 @@ import os
 import re
 import subprocess
 import urllib.request
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Body
 from fastapi.responses import HTMLResponse, PlainTextResponse, FileResponse
 
+import backup
 import db
 import links
 import nodeprov
@@ -488,6 +489,35 @@ def admin_set_bot_settings(request: Request, body: dict = Body(...)):
     except Exception:
         restarted = False
     return {"ok": True, "username": username, "restarted": restarted}
+
+
+@app.get("/admin/api/backup")
+def admin_download_backup(request: Request):
+    require_admin(request)
+    data = backup.create_backup()
+    filename = f"mbs-backup-{datetime.datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.tar.gz"
+    return Response(
+        content=data, media_type="application/gzip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/admin/api/backup/restore")
+async def admin_restore_backup(request: Request, file: UploadFile = File(...)):
+    require_admin(request)
+    data = await file.read()
+    try:
+        result = backup.restore_backup(data)
+    except backup.RestoreError as e:
+        raise HTTPException(400, str(e))
+    restarted_bot = False
+    if result["restored_env"]:
+        try:
+            subprocess.run(["systemctl", "restart", "mbs-bot"], check=True, timeout=15)
+            restarted_bot = True
+        except Exception:
+            restarted_bot = False
+    return {"ok": True, **result, "restarted_bot": restarted_bot}
 
 
 @app.get("/admin/api/stats")
