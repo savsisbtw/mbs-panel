@@ -98,6 +98,17 @@ cmd_update() {
   cp "$APP_DIR/mbs" /usr/local/bin/mbs
   chmod +x /usr/local/bin/mbs
 
+  echo "обновляю systemd-юниты..."
+  local cpu_count api_workers
+  cpu_count=$(nproc 2>/dev/null || echo 1)
+  if [ "$cpu_count" -lt 2 ]; then api_workers=1
+  elif [ "$cpu_count" -gt 4 ]; then api_workers=4
+  else api_workers=$cpu_count
+  fi
+  cp "$APP_DIR/systemd/mbs-bot.service" /etc/systemd/system/mbs-bot.service
+  sed "s/__WORKERS__/$api_workers/" "$APP_DIR/systemd/mbs-api.service" > /etc/systemd/system/mbs-api.service
+  systemctl daemon-reload
+
   echo "перезапускаю..."
   systemctl restart mbs-bot mbs-api xray
   systemctl reload nginx 2>/dev/null || true

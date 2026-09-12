@@ -98,9 +98,10 @@ def build_subscription_text(subs: list[dict]) -> str:
         if cur is None or s["expires_at"] > cur["expires_at"]:
             best_by_node[s["node"]] = s
 
+    nodes_by_code = {n["code"]: n for n in db.list_nodes()}
     lines = []
     for node_code, s in best_by_node.items():
-        node = db.get_node(node_code)
+        node = nodes_by_code.get(node_code)
         if not node:
             continue
         base_name = display_name(node["label"])

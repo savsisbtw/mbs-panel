@@ -377,8 +377,13 @@ cat > /usr/local/etc/xray/config.json << XRAYEOF
 XRAYEOF
 
 echo "systemd-юниты..."
+CPU_COUNT=$(nproc 2>/dev/null || echo 1)
+if [ "$CPU_COUNT" -lt 2 ]; then API_WORKERS=1
+elif [ "$CPU_COUNT" -gt 4 ]; then API_WORKERS=4
+else API_WORKERS=$CPU_COUNT
+fi
 cp "$APP_DIR/systemd/mbs-bot.service" /etc/systemd/system/mbs-bot.service
-cp "$APP_DIR/systemd/mbs-api.service" /etc/systemd/system/mbs-api.service
+sed "s/__WORKERS__/$API_WORKERS/" "$APP_DIR/systemd/mbs-api.service" > /etc/systemd/system/mbs-api.service
 systemctl daemon-reload
 
 echo "ставим CLI mbs..."

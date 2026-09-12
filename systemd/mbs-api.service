@@ -5,7 +5,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/mbs-panel
-ExecStart=/opt/mbs-panel/venv/bin/uvicorn api:app --host 127.0.0.1 --port 8001
+ExecStart=/opt/mbs-panel/venv/bin/uvicorn api:app --host 127.0.0.1 --port 8001 --workers __WORKERS__
 Restart=on-failure
 RestartSec=3
 User=root
