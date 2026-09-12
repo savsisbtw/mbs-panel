@@ -367,6 +367,10 @@ async def periodic_sync():
             await reconcile_pending_payments()
         except Exception:
             log.exception("payment reconciliation failed")
+        try:
+            db.delete_expired_admin_sessions()
+        except Exception:
+            log.exception("expired admin session cleanup failed")
         await asyncio.sleep(90)
 
 

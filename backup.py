@@ -1,3 +1,4 @@
+import glob
 import io
 import json
 import os
@@ -10,10 +11,21 @@ from config import DB_PATH, BASE_DIR
 
 ENV_PATH = os.path.join(BASE_DIR, ".env")
 MAX_RESTORE_SIZE = 200 * 1024 * 1024
+KEEP_SAFETY_COPIES = 5
 
 
 class RestoreError(Exception):
     pass
+
+
+def _prune_old_safety_copies(keep: int = KEEP_SAFETY_COPIES):
+    for base in (DB_PATH, ENV_PATH):
+        copies = sorted(glob.glob(f"{base}.before-restore-*"))
+        for path in copies[:-keep] if keep > 0 else copies:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
 
 def create_backup() -> bytes:
@@ -111,4 +123,5 @@ def restore_backup(data: bytes) -> dict:
     os.chmod(tmp_db_path, 0o600)
     os.replace(tmp_db_path, DB_PATH)
 
+    _prune_old_safety_copies()
     return {"restored_env": restored_env, "safety_copy": safety_copy}

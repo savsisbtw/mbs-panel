@@ -382,6 +382,11 @@ def delete_admin_session(token: str):
         conn.execute("DELETE FROM admin_sessions WHERE token=?", (token,))
 
 
+def delete_expired_admin_sessions():
+    with get_conn() as conn:
+        conn.execute("DELETE FROM admin_sessions WHERE expires_at<=?", (now_iso(),))
+
+
 def list_all_subscriptions(limit: int = 200):
     with get_conn() as conn:
         rows = conn.execute(
