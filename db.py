@@ -104,6 +104,7 @@ _NEW_NODE_COLUMNS = {
     "hysteria_port": "INTEGER",
     "hysteria_password": "TEXT",
     "hysteria_obfs_password": "TEXT",
+    "sort_order": "INTEGER NOT NULL DEFAULT 0",
 }
 
 _NEW_USER_COLUMNS = {
@@ -114,6 +115,7 @@ _NEW_USER_COLUMNS = {
 def _migrate():
     with get_conn() as conn:
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(nodes)").fetchall()}
+        needs_sort_order_backfill = "sort_order" not in cols
         for name, decl in _NEW_NODE_COLUMNS.items():
             if name not in cols:
                 conn.execute(f"ALTER TABLE nodes ADD COLUMN {name} {decl}")
@@ -121,6 +123,12 @@ def _migrate():
         for name, decl in _NEW_USER_COLUMNS.items():
             if name not in ucols:
                 conn.execute(f"ALTER TABLE users ADD COLUMN {name} {decl}")
+        if needs_sort_order_backfill:
+            rows = conn.execute(
+                "SELECT code FROM nodes ORDER BY (code='de1') DESC, created_at ASC"
+            ).fetchall()
+            for i, row in enumerate(rows):
+                conn.execute("UPDATE nodes SET sort_order=? WHERE code=?", (i, row["code"]))
 
 
 def now_iso():
@@ -173,7 +181,7 @@ def list_nodes(enabled_only: bool = False):
     q = "SELECT * FROM nodes"
     if enabled_only:
         q += " WHERE enabled=1"
-    q += " ORDER BY (code='de1') DESC, created_at ASC"
+    q += " ORDER BY sort_order ASC, created_at ASC"
     with get_conn() as conn:
         rows = conn.execute(q).fetchall()
         return [dict(r) for r in rows]
@@ -185,12 +193,27 @@ def get_node(code: str):
         return dict(row) if row else None
 
 
+def _next_sort_order(conn):
+    row = conn.execute("SELECT MAX(sort_order) m FROM nodes").fetchone()
+    return (row["m"] or 0) + 1
+
+
+def reorder_nodes(codes: list):
+    with get_conn() as conn:
+        existing = {r["code"] for r in conn.execute("SELECT code FROM nodes").fetchall()}
+        if set(codes) != existing:
+            raise ValueError("reorder list must include exactly all existing node codes")
+        for i, code in enumerate(codes):
+            conn.execute("UPDATE nodes SET sort_order=? WHERE code=?", (i, code))
+
+
 def create_node(code, label, kind, address, port, public_key, short_id, sni, flow, shared_uuid=None):
     with get_conn() as conn:
+        next_order = _next_sort_order(conn)
         conn.execute(
-            "INSERT INTO nodes (code, label, kind, status, address, port, public_key, short_id, sni, flow, shared_uuid, enabled, created_at) "
-            "VALUES (?,?,?, 'active', ?,?,?,?,?,?,?,1,?)",
-            (code, label, kind, address, port, public_key, short_id, sni, flow, shared_uuid, now_iso()),
+            "INSERT INTO nodes (code, label, kind, status, address, port, public_key, short_id, sni, flow, shared_uuid, sort_order, enabled, created_at) "
+            "VALUES (?,?,?, 'active', ?,?,?,?,?,?,?,?,1,?)",
+            (code, label, kind, address, port, public_key, short_id, sni, flow, shared_uuid, next_order, now_iso()),
         )
     return get_node(code)
 
@@ -203,13 +226,14 @@ def create_pending_node(label, address, port, sni, private_key, public_key, shor
     token = secrets.token_urlsafe(24)
     hysteria_enabled = 1 if hysteria_password else 0
     with get_conn() as conn:
+        next_order = _next_sort_order(conn)
         conn.execute(
             "INSERT INTO nodes (code, label, kind, status, address, port, public_key, private_key, short_id, sni, flow, "
-            "provision_token, transports_json, hysteria_enabled, hysteria_port, hysteria_password, hysteria_obfs_password, enabled, created_at) "
-            "VALUES (?,?, 'managed', 'pending', ?,?,?,?,?,?, 'xtls-rprx-vision', ?, ?, ?, ?, ?, ?, 0, ?)",
+            "provision_token, transports_json, hysteria_enabled, hysteria_port, hysteria_password, hysteria_obfs_password, sort_order, enabled, created_at) "
+            "VALUES (?,?, 'managed', 'pending', ?,?,?,?,?,?, 'xtls-rprx-vision', ?, ?, ?, ?, ?, ?, ?, 0, ?)",
             (code, label, address, port, public_key, private_key, short_id, sni, token,
              transports_json if transports_json is not None else jsonmod.dumps([]),
-             hysteria_enabled, hysteria_port, hysteria_password, hysteria_obfs_password, now_iso()),
+             hysteria_enabled, hysteria_port, hysteria_password, hysteria_obfs_password, next_order, now_iso()),
         )
     return get_node(code), token
 

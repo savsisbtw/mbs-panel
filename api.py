@@ -742,6 +742,19 @@ def admin_nodes(request: Request):
     return nodes
 
 
+@app.post("/admin/api/nodes/reorder")
+def admin_reorder_nodes(request: Request, body: dict = Body(...)):
+    require_admin(request)
+    codes = body.get("codes")
+    if not isinstance(codes, list) or not codes:
+        raise HTTPException(400, "codes must be a non-empty list")
+    try:
+        db.reorder_nodes(codes)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
 @app.post("/admin/api/nodes")
 def admin_create_node(request: Request, body: dict = Body(...)):
     require_admin(request)

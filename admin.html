@@ -228,6 +228,11 @@
 
   .empty { text-align: center; color: var(--muted); padding: 40px 0; font-size: 13px; }
 
+  .drag-handle { cursor: grab; color: var(--muted); text-align: center; user-select: none; font-size: 15px; }
+  .draggable-row.dragging { opacity: 0.4; }
+  .draggable-row.drag-over { box-shadow: inset 0 2px 0 var(--accent); }
+  .draggable-row:active .drag-handle { cursor: grabbing; }
+
   .modal-overlay {
     position: fixed; inset: 0; background: rgba(1,4,9,0.6); backdrop-filter: blur(2px);
     display: flex; align-items: center; justify-content: center; padding: 24px; z-index: 100;
@@ -344,7 +349,7 @@
 
       <div class="section">
         <div class="table-wrap"><table><thead><tr>
-          <th>Локация</th><th>Адрес</th><th>Тип</th><th>Статус</th><th>Live</th><th></th>
+          <th style="width:28px"></th><th>Локация</th><th>Адрес</th><th>Тип</th><th>Статус</th><th>Live</th><th></th>
         </tr></thead><tbody id="nodes-body"></tbody></table></div>
       </div>
 
@@ -1051,11 +1056,54 @@ async function createGift() {
 function copyText(t) { navigator.clipboard.writeText(t); }
 
 async function loadNodes() {
-  const nodes = await api("/admin/api/nodes");
-  nodesCache = nodes;
+  nodesCache = await api("/admin/api/nodes");
+  renderNodesTable();
+}
+
+let dragSrcCode = null;
+function wireNodeDragAndDrop() {
   const body = document.getElementById("nodes-body");
-  body.innerHTML = nodes.map((n, i) => `
-    <tr ${rowAttr(i)}>
+  body.querySelectorAll("tr.draggable-row").forEach((row) => {
+    row.addEventListener("dragstart", (e) => {
+      dragSrcCode = row.dataset.code;
+      row.classList.add("dragging");
+      e.dataTransfer.effectAllowed = "move";
+    });
+    row.addEventListener("dragend", () => {
+      row.classList.remove("dragging");
+      body.querySelectorAll("tr").forEach((r) => r.classList.remove("drag-over"));
+    });
+    row.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      if (row.dataset.code === dragSrcCode) return;
+      row.classList.add("drag-over");
+    });
+    row.addEventListener("dragleave", () => row.classList.remove("drag-over"));
+    row.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      row.classList.remove("drag-over");
+      const targetCode = row.dataset.code;
+      if (!dragSrcCode || targetCode === dragSrcCode) return;
+      const order = nodesCache.map((n) => n.code);
+      const from = order.indexOf(dragSrcCode);
+      const to = order.indexOf(targetCode);
+      order.splice(to, 0, order.splice(from, 1)[0]);
+      nodesCache.sort((a, b) => order.indexOf(a.code) - order.indexOf(b.code));
+      renderNodesTable();
+      try {
+        await api("/admin/api/nodes/reorder", { method: "POST", body: JSON.stringify({ codes: order }) });
+      } catch (err) {
+        loadNodes();
+      }
+    });
+  });
+}
+
+function renderNodesTable() {
+  const body = document.getElementById("nodes-body");
+  body.innerHTML = nodesCache.map((n, i) => `
+    <tr class="reveal draggable-row" style="animation-delay:${Math.min(i, 10) * 0.025}s" draggable="true" data-code="${esc(n.code)}">
+      <td class="drag-handle" title="Перетащи, чтобы поменять порядок">⠿</td>
       <td>${esc(n.label)}</td><td>${esc(n.address) || "—"}${n.port && n.address ? ":" + n.port : ""}</td>
       <td>${n.kind === "local" ? "локальная" : n.kind === "managed" ? "управляемая" : "внешняя"}</td>
       <td>${n.status === "pending" ? '<span class="badge warn">ожидает установки</span>' : (n.enabled ? '<span class="badge ok">включена</span>' : '<span class="badge bad">выключена</span>')}</td>
@@ -1067,6 +1115,7 @@ async function loadNodes() {
       </td>
     </tr>
   `).join("");
+  wireNodeDragAndDrop();
 }
 
 async function loadNodeMetrics(code) {
