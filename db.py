@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import os
 import sqlite3
 import secrets
@@ -50,6 +52,13 @@ CREATE TABLE IF NOT EXISTS admin_sessions (
     token TEXT PRIMARY KEY,
     created_at TEXT NOT NULL,
     expires_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS admins (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS payments (
@@ -111,6 +120,10 @@ _NEW_USER_COLUMNS = {
     "hwid_limit": "INTEGER",
 }
 
+_NEW_ADMIN_SESSION_COLUMNS = {
+    "admin_id": "INTEGER",
+}
+
 
 def _migrate():
     with get_conn() as conn:
@@ -123,6 +136,10 @@ def _migrate():
         for name, decl in _NEW_USER_COLUMNS.items():
             if name not in ucols:
                 conn.execute(f"ALTER TABLE users ADD COLUMN {name} {decl}")
+        scols = {r["name"] for r in conn.execute("PRAGMA table_info(admin_sessions)").fetchall()}
+        for name, decl in _NEW_ADMIN_SESSION_COLUMNS.items():
+            if name not in scols:
+                conn.execute(f"ALTER TABLE admin_sessions ADD COLUMN {name} {decl}")
         if needs_sort_order_backfill:
             rows = conn.execute(
                 "SELECT code FROM nodes ORDER BY (code='de1') DESC, created_at ASC"
@@ -154,6 +171,7 @@ def init_db():
         conn.executescript(SCHEMA)
     _migrate()
     _seed_local_node()
+    _seed_default_admin()
     for suffix in ("", "-wal", "-shm"):
         path = DB_PATH + suffix
         if os.path.exists(path):
@@ -174,6 +192,36 @@ def _seed_local_node():
             "INSERT INTO nodes (code, label, kind, address, port, public_key, short_id, sni, flow, enabled, created_at) "
             "VALUES ('de1', ?, 'local', ?, 443, ?, ?, ?, 'xtls-rprx-vision', 1, ?)",
             ("Локальная нода (de1)", DE1_ADDRESS, XRAY_PUBLIC_KEY, XRAY_SHORT_ID_TCP, REALITY_SNI, now_iso()),
+        )
+
+
+def _hash_password(password: str, salt: bytes | None = None) -> str:
+    if salt is None:
+        salt = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 200_000)
+    return salt.hex() + "$" + dk.hex()
+
+
+def _verify_password(password: str, stored: str) -> bool:
+    try:
+        salt_hex, hash_hex = stored.split("$")
+    except ValueError:
+        return False
+    salt = bytes.fromhex(salt_hex)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 200_000)
+    return hmac.compare_digest(dk.hex(), hash_hex)
+
+
+def _seed_default_admin():
+    from config import ADMIN_PANEL_PASSWORD
+
+    with get_conn() as conn:
+        row = conn.execute("SELECT 1 FROM admins LIMIT 1").fetchone()
+        if row or not ADMIN_PANEL_PASSWORD:
+            return
+        conn.execute(
+            "INSERT INTO admins (username, password_hash, created_at) VALUES (?,?,?)",
+            ("admin", _hash_password(ADMIN_PANEL_PASSWORD), now_iso()),
         )
 
 
@@ -356,13 +404,13 @@ def redeem_gift_code(code: str, tg_id: int):
         return dict(row), None
 
 
-def create_admin_session(hours: int = 168):
+def create_admin_session(admin_id: int | None = None, hours: int = 168):
     token = secrets.token_urlsafe(32)
     expires = datetime.datetime.utcnow() + datetime.timedelta(hours=hours)
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO admin_sessions (token, created_at, expires_at) VALUES (?,?,?)",
-            (token, now_iso(), expires.isoformat()),
+            "INSERT INTO admin_sessions (token, admin_id, created_at, expires_at) VALUES (?,?,?,?)",
+            (token, admin_id, now_iso(), expires.isoformat()),
         )
     return token
 
@@ -377,6 +425,18 @@ def validate_admin_session(token: str) -> bool:
         return row is not None
 
 
+def get_session_admin(token: str):
+    if not token:
+        return None
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT a.id, a.username FROM admin_sessions s "
+            "JOIN admins a ON a.id = s.admin_id "
+            "WHERE s.token=? AND s.expires_at>?", (token, now_iso())
+        ).fetchone()
+        return dict(row) if row else None
+
+
 def delete_admin_session(token: str):
     with get_conn() as conn:
         conn.execute("DELETE FROM admin_sessions WHERE token=?", (token,))
@@ -385,6 +445,42 @@ def delete_admin_session(token: str):
 def delete_expired_admin_sessions():
     with get_conn() as conn:
         conn.execute("DELETE FROM admin_sessions WHERE expires_at<=?", (now_iso(),))
+
+
+def verify_admin_login(username: str, password: str):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM admins WHERE username=?", (username,)).fetchone()
+        if not row or not _verify_password(password, row["password_hash"]):
+            return None
+        return dict(row)
+
+
+def list_admins():
+    with get_conn() as conn:
+        rows = conn.execute("SELECT id, username, created_at FROM admins ORDER BY created_at ASC").fetchall()
+        return [dict(r) for r in rows]
+
+
+def create_admin(username: str, password: str):
+    with get_conn() as conn:
+        existing = conn.execute("SELECT 1 FROM admins WHERE username=?", (username,)).fetchone()
+        if existing:
+            raise ValueError("username already taken")
+        conn.execute(
+            "INSERT INTO admins (username, password_hash, created_at) VALUES (?,?,?)",
+            (username, _hash_password(password), now_iso()),
+        )
+        row = conn.execute("SELECT id, username, created_at FROM admins WHERE username=?", (username,)).fetchone()
+        return dict(row)
+
+
+def delete_admin(admin_id: int):
+    with get_conn() as conn:
+        count = conn.execute("SELECT COUNT(*) c FROM admins").fetchone()["c"]
+        if count <= 1:
+            raise ValueError("cannot delete the last remaining admin")
+        conn.execute("DELETE FROM admins WHERE id=?", (admin_id,))
+        conn.execute("DELETE FROM admin_sessions WHERE admin_id=?", (admin_id,))
 
 
 def list_all_subscriptions(limit: int = 200):

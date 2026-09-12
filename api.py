@@ -18,7 +18,7 @@ import payments
 import xray_manager
 from config import (
     PLANS, PLANS_BY_CODE, SITE_DOMAIN, SUB_DOMAIN, PANEL_DOMAIN,
-    ADMIN_PANEL_PASSWORD, BOT_USERNAME, BOT_TOKEN, BASE_DIR,
+    BOT_USERNAME, BOT_TOKEN, BASE_DIR,
     HWID_LIMIT_ENABLED, HWID_FALLBACK_LIMIT,
 )
 
@@ -437,9 +437,12 @@ async def register_node(token: str, request: Request):
 
 @app.post("/admin/api/login")
 def admin_login(response: Response, body: dict = Body(...)):
-    if body.get("password") != ADMIN_PANEL_PASSWORD:
-        raise HTTPException(401, "wrong password")
-    token = db.create_admin_session()
+    username = (body.get("username") or "").strip()
+    password = body.get("password") or ""
+    admin = db.verify_admin_login(username, password)
+    if not admin:
+        raise HTTPException(401, "wrong username or password")
+    token = db.create_admin_session(admin["id"])
     response.set_cookie(ADMIN_COOKIE, token, httponly=True, secure=True, samesite="strict", max_age=7 * 24 * 3600)
     return {"ok": True}
 
@@ -456,7 +459,44 @@ def admin_logout(request: Request, response: Response):
 @app.get("/admin/api/me")
 def admin_me(request: Request):
     token = request.cookies.get(ADMIN_COOKIE)
-    return {"authenticated": db.validate_admin_session(token)}
+    admin = db.get_session_admin(token)
+    return {"authenticated": admin is not None, "username": admin["username"] if admin else None}
+
+
+@app.get("/admin/api/admins")
+def admin_list_admins(request: Request):
+    require_admin(request)
+    return db.list_admins()
+
+
+@app.post("/admin/api/admins")
+def admin_create_admin(request: Request, body: dict = Body(...)):
+    require_admin(request)
+    username = (body.get("username") or "").strip()
+    password = body.get("password") or ""
+    if len(username) < 3:
+        raise HTTPException(400, "username too short")
+    if len(password) < 8:
+        raise HTTPException(400, "password too short")
+    try:
+        return db.create_admin(username, password)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/admin/api/admins/{admin_id}")
+def admin_delete_admin(admin_id: int, request: Request):
+    token = request.cookies.get(ADMIN_COOKIE)
+    current = db.get_session_admin(token)
+    if not current:
+        raise HTTPException(401, "unauthorized")
+    if current["id"] == admin_id:
+        raise HTTPException(400, "cannot delete your own account while logged in as it")
+    try:
+        db.delete_admin(admin_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
 
 
 

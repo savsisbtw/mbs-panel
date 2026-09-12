@@ -282,8 +282,9 @@
       <div class="splash-tagline">made by savsis</div>
     </div>
     <h1>Вход</h1>
-    <p>Введи пароль администратора</p>
-    <input type="password" id="login-password" placeholder="Пароль" onkeydown="if(event.key==='Enter')login()">
+    <p>Логин и пароль администратора</p>
+    <input type="text" id="login-username" placeholder="Логин" value="admin" autocomplete="username" onkeydown="if(event.key==='Enter')document.getElementById('login-password').focus()">
+    <input type="password" id="login-password" placeholder="Пароль" autocomplete="current-password" onkeydown="if(event.key==='Enter')login()">
     <button class="btn block" onclick="login()">Войти</button>
     <div id="login-err"></div>
   </div>
@@ -301,6 +302,7 @@
     <div class="nav-item" data-view="docs" onclick="showView('docs')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>Документация</div>
     <div class="nav-item" data-view="settings" onclick="showView('settings')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Настройки</div>
     <div class="sidebar-footer">
+      <div class="version-tag" id="logged-in-as" style="margin-bottom:6px"></div>
       <button class="btn ghost" style="width:100%" onclick="logout()">Выйти</button>
       <div class="version-tag">MBS Panel v1.0.0 · <a href="https://github.com/devsavsis/mbs-panel/releases/latest" target="_blank" style="color:inherit">обновления</a></div>
     </div>
@@ -542,6 +544,20 @@
       </div>
 
       <div class="section" style="margin-top:20px">
+        <div class="section-head"><h2>Админы</h2></div>
+        <p class="page-sub" style="margin-bottom:16px">Отдельные логины для входа в панель — на случай если админов несколько.</p>
+        <div class="table-wrap"><table><thead><tr>
+          <th>Логин</th><th>Создан</th><th></th>
+        </tr></thead><tbody id="admins-body"></tbody></table></div>
+        <div class="form-row" style="margin-top:16px">
+          <div><label class="f">Логин</label><input type="text" id="new-admin-username" placeholder="Новый логин"></div>
+          <div><label class="f">Пароль</label><input type="password" id="new-admin-password" placeholder="Минимум 8 символов"></div>
+          <div style="flex:0"><label class="f">&nbsp;</label><button class="btn" onclick="createAdmin()">Добавить</button></div>
+        </div>
+        <div id="admins-result"></div>
+      </div>
+
+      <div class="section" style="margin-top:20px">
         <div class="section-head"><h2>Бэкап и восстановление</h2></div>
         <p class="page-sub" style="margin-bottom:16px">Бэкап — это база (юзеры, подписки, ноды, платежи) и <code>.env</code> одним файлом. Держи копии где-то отдельно от сервера.</p>
         <div class="form-row" style="align-items:flex-start">
@@ -582,17 +598,21 @@ function showApp() {
   document.getElementById("login-screen").style.display = "none";
   document.getElementById("app").classList.add("show");
   loadDashboard();
+  api("/admin/api/me").then((me) => {
+    document.getElementById("logged-in-as").textContent = me.username ? "вошёл как " + me.username : "";
+  }).catch(() => {});
 }
 
 async function login() {
+  const username = document.getElementById("login-username").value.trim();
   const password = document.getElementById("login-password").value;
   const err = document.getElementById("login-err");
   err.textContent = "";
   try {
-    await api("/admin/api/login", { method: "POST", body: JSON.stringify({ password }) });
+    await api("/admin/api/login", { method: "POST", body: JSON.stringify({ username, password }) });
     showApp();
   } catch (e) {
-    err.textContent = "Неверный пароль";
+    err.textContent = "Неверный логин или пароль";
   }
 }
 async function logout() {
@@ -611,7 +631,7 @@ function showView(name) {
   if (name === "nodes") loadNodes();
   if (name === "traffic") loadTraffic();
   if (name === "payments") loadPayments();
-  if (name === "settings") loadBotSettings();
+  if (name === "settings") { loadBotSettings(); loadAdmins(); }
 }
 
 const COUNTRIES = [
@@ -886,6 +906,47 @@ async function saveBotSettings() {
     loadBotSettings();
   } catch (e) {
     result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--red)">Не получилось — проверь токен и попробуй снова</p>';
+  }
+}
+
+let currentAdminUsername = null;
+async function loadAdmins() {
+  const admins = await api("/admin/api/admins");
+  const me = await api("/admin/api/me");
+  currentAdminUsername = me.username;
+  const body = document.getElementById("admins-body");
+  body.innerHTML = admins.map((a, i) => `
+    <tr ${rowAttr(i)}>
+      <td>${esc(a.username)}${a.username === currentAdminUsername ? ' <span class="badge ok">это ты</span>' : ""}</td>
+      <td>${fmtDate(a.created_at)}</td>
+      <td>${admins.length > 1 && a.username !== currentAdminUsername ? `<button class="muted-btn" onclick="deleteAdmin(${a.id})">Удалить</button>` : ""}</td>
+    </tr>
+  `).join("");
+}
+
+async function createAdmin() {
+  const username = document.getElementById("new-admin-username").value.trim();
+  const password = document.getElementById("new-admin-password").value;
+  const result = document.getElementById("admins-result");
+  if (!username || !password) return;
+  try {
+    await api("/admin/api/admins", { method: "POST", body: JSON.stringify({ username, password }) });
+    document.getElementById("new-admin-username").value = "";
+    document.getElementById("new-admin-password").value = "";
+    result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--green)">Админ добавлен</p>';
+    loadAdmins();
+  } catch (e) {
+    result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--red)">Не получилось: ' + esc(e.message) + '</p>';
+  }
+}
+
+async function deleteAdmin(id) {
+  if (!confirm("Удалить этого админа?")) return;
+  try {
+    await api(`/admin/api/admins/${id}`, { method: "DELETE" });
+    loadAdmins();
+  } catch (e) {
+    document.getElementById("admins-result").innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--red)">Не получилось: ' + esc(e.message) + '</p>';
   }
 }
 
