@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MBS Panel</title>
+<meta name="description" content="Самостоятельная VPN-панель на Xray-core: VLESS+Reality, Hysteria2, Telegram-бот, платежи и админка — без Docker и без чужого закрытого кода внутри.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 rx=%2222%22 fill=%22%230a0b0f%22/><path d=%22M20 65 L50 25 L80 65%22 stroke=%22%237c6cf0%22 stroke-width=%228%22 fill=%22none%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/></svg>">
+<style>
+  :root {
+    --bg: #0a0b0f; --card: #131519; --border: #1e2128;
+    --text: #eceef2; --muted: #868c99; --accent: #7c6cf0;
+    --good: #5fd48a; --bad: #e8748a;
+    --mono: "SF Mono", "Cascadia Code", Consolas, monospace;
+    --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 0 24px; }
+
+  header { display: flex; align-items: center; justify-content: space-between; padding: 26px 0; }
+  .logo { display: flex; align-items: center; gap: 9px; font-weight: 600; font-size: 15px; letter-spacing: -0.01em; }
+  .logo svg { width: 20px; height: 20px; }
+  nav { display: flex; align-items: center; gap: 26px; }
+  nav a { position: relative; text-decoration: none; color: var(--muted); font-size: 14px; transition: color .25s var(--ease); }
+  nav a::after {
+    content: ""; position: absolute; left: 0; bottom: -4px; width: 100%; height: 1px;
+    background: currentColor; transform: scaleX(0); transform-origin: left; transition: transform .3s var(--ease);
+  }
+  nav a:hover { color: var(--text); }
+  nav a:hover::after { transform: scaleX(1); }
+
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px; padding: 13px 22px; border-radius: 10px;
+    background: var(--text); color: var(--bg); text-decoration: none; font-weight: 600; font-size: 14px;
+    border: none; cursor: pointer; transition: transform .15s var(--ease), opacity .15s var(--ease);
+  }
+  .btn:hover { opacity: .85; }
+  .btn:active { transform: scale(.97); }
+  .btn.ghost {
+    background: transparent; color: var(--text); border: 1px solid var(--border);
+    transition: transform .15s var(--ease), border-color .25s var(--ease), background .25s var(--ease);
+  }
+  .btn.ghost:hover { border-color: #333947; background: var(--card); opacity: 1; }
+  .btn.sm { padding: 9px 14px; font-size: 13px; }
+
+  .reveal { opacity: 0; transform: translateY(14px); filter: blur(6px); transition: opacity .7s var(--ease), transform .7s var(--ease), filter .7s var(--ease); }
+  .reveal.in { opacity: 1; transform: translateY(0); filter: blur(0); }
+
+  .hero { padding: 80px 0 56px; }
+  .badges { display: flex; gap: 8px; margin-bottom: 22px; flex-wrap: wrap; }
+  .badges img { height: 20px; display: block; }
+  .hero h1 { font-size: 44px; line-height: 1.14; margin: 0 0 18px; letter-spacing: -.03em; font-weight: 600; max-width: 680px; }
+  .hero .accent { color: var(--accent); }
+  .hero p { color: var(--muted); font-size: 17px; max-width: 560px; margin: 0 0 30px; line-height: 1.6; }
+  .hero-ctas { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 34px; }
+
+  .install {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px 18px; max-width: 620px; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  }
+  .install code { font-family: var(--mono); font-size: 13.5px; color: var(--text); overflow-x: auto; white-space: nowrap; }
+  .install code .dim { color: var(--muted); }
+  .copy-btn {
+    flex-shrink: 0; background: transparent; border: 1px solid var(--border); color: var(--muted);
+    border-radius: 7px; padding: 7px 11px; font-size: 12px; cursor: pointer; font-family: inherit;
+    transition: all .2s var(--ease);
+  }
+  .copy-btn:hover { color: var(--text); border-color: #333947; }
+  .copy-btn.copied { color: var(--good); border-color: var(--good); }
+
+  .divider { height: 1px; background: var(--border); margin: 0; }
+
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--border); margin: 0; }
+  .feature { background: var(--bg); padding: 32px 28px; }
+  .feature .idx { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; margin-bottom: 14px; }
+  .feature h3 { font-size: 16px; margin: 0 0 8px; font-weight: 600; }
+  .feature p { color: var(--muted); font-size: 14px; margin: 0; line-height: 1.55; }
+
+  section { padding: 72px 0; }
+  .section-label { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 12px; }
+  h2 { font-size: 26px; margin: 0 0 12px; font-weight: 600; letter-spacing: -.01em; }
+  .section-sub { color: var(--muted); font-size: 15px; max-width: 560px; line-height: 1.6; margin: 0 0 36px; }
+
+  .cmp-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; }
+  table.cmp { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 560px; }
+  table.cmp th, table.cmp td { padding: 13px 18px; text-align: left; border-bottom: 1px solid var(--border); }
+  table.cmp th { color: var(--muted); font-weight: 500; font-size: 12.5px; text-transform: uppercase; letter-spacing: .04em; background: var(--card); }
+  table.cmp th:not(:first-child), table.cmp td:not(:first-child) { text-align: center; }
+  table.cmp tr:last-child td { border-bottom: none; }
+  table.cmp td:first-child { color: var(--text); }
+  table.cmp .us { background: rgba(124,108,240,.06); font-weight: 600; }
+  .yes { color: var(--good); }
+  .no { color: var(--muted); }
+  .soon { color: var(--accent); font-size: 12.5px; }
+  .cmp-note { color: var(--muted); font-size: 13px; margin-top: 14px; line-height: 1.5; }
+
+  .arch-diagram {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 28px;
+    font-family: var(--mono); font-size: 13px; color: var(--muted); line-height: 2; overflow-x: auto; white-space: pre;
+  }
+  .arch-diagram .n { color: var(--text); } .arch-diagram .a { color: var(--accent); }
+
+  .how-steps { display: flex; flex-direction: column; gap: 18px; max-width: 640px; }
+  .how-step { display: flex; gap: 16px; color: var(--muted); font-size: 14.5px; line-height: 1.6; }
+  .how-step span {
+    flex-shrink: 0; width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--accent);
+    font-variant-numeric: tabular-nums;
+  }
+  .how-step b { color: var(--text); font-weight: 600; }
+  code.inline { font-family: var(--mono); background: var(--card); border: 1px solid var(--border); border-radius: 5px; padding: 2px 6px; font-size: 13px; color: var(--text); }
+
+  .stack { display: flex; flex-wrap: wrap; gap: 10px; }
+  .stack span {
+    border: 1px solid var(--border); border-radius: 8px; padding: 7px 13px; font-size: 13px; color: var(--muted);
+    font-family: var(--mono);
+  }
+
+  .cta { text-align: center; padding: 20px 0 90px; }
+  .cta h2 { margin-bottom: 8px; }
+  .cta .section-sub { margin: 0 auto 28px; text-align: center; }
+  .cta-row { display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; }
+
+  footer { border-top: 1px solid var(--border); padding: 28px 0; color: var(--muted); font-size: 13px; }
+  footer .wrap { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+  footer a { text-decoration: underline; text-underline-offset: 2px; }
+
+  @media (max-width: 640px) {
+    .hero h1 { font-size: 32px; }
+    .grid { grid-template-columns: 1fr; }
+    .install { flex-direction: column; align-items: stretch; }
+    .install code { white-space: normal; word-break: break-all; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+    .reveal { opacity: 1 !important; transform: none !important; filter: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">
+      <svg viewBox="0 0 100 100" fill="none"><path d="M20 65 L50 25 L80 65" stroke="#7c6cf0" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      MBS Panel
+    </div>
+    <nav>
+      <a href="#features">Возможности</a>
+      <a href="#comparison">Сравнение</a>
+      <a href="#install">Установка</a>
+      <a href="https://github.com/devsavsis/mbs-panel" target="_blank">GitHub</a>
+    </nav>
+  </header>
+
+  <section class="hero" style="padding-bottom:0">
+    <div class="badges reveal">
+      <img src="https://img.shields.io/github/actions/workflow/status/devsavsis/mbs-panel/ci.yml?label=CI&style=flat-square&color=7c6cf0" alt="CI">
+      <img src="https://img.shields.io/github/license/devsavsis/mbs-panel?style=flat-square&color=7c6cf0" alt="License">
+      <img src="https://img.shields.io/github/stars/devsavsis/mbs-panel?style=flat-square&color=7c6cf0" alt="Stars">
+    </div>
+    <h1 class="reveal">VPN-панель, которую<br>можно <span class="accent">понять за вечер</span></h1>
+    <p class="reveal">Xray-core, Reality, Hysteria2, Telegram-бот и платежи — в одном небольшом репозитории на Python. Без Docker, без чужой закрытой панели под капотом, без разбора чужого фреймворка перед первым коммитом.</p>
+    <div class="hero-ctas reveal">
+      <a class="btn" href="https://github.com/devsavsis/mbs-panel" target="_blank">Смотреть на GitHub</a>
+      <a class="btn ghost" href="#install">Установка</a>
+    </div>
+    <div class="install reveal">
+      <code><span class="dim">$</span> git clone https://github.com/devsavsis/mbs-panel.git <span class="dim">&&</span> cd mbs-panel <span class="dim">&&</span> sudo bash install.sh</code>
+      <button class="copy-btn" onclick="copyInstall(this)">Копировать</button>
+    </div>
+  </section>
+</div>
+
+<div class="divider" style="margin-top:56px"></div>
+
+<div class="wrap">
+  <div class="grid" id="features">
+    <div class="feature reveal">
+      <div class="idx">01</div>
+      <h3>Телеграм-бот как основа</h3>
+      <p>Не уведомления сбоку, а весь флоу покупки и управления — тарифы, гифт-коды, авто-отключение по истечении раз в 90 секунд, а не раз в полчаса.</p>
+    </div>
+    <div class="feature reveal">
+      <div class="idx">02</div>
+      <h3>Админка без фреймворков</h3>
+      <p>Чистый HTML/CSS/JS. Дашборд, карточка юзера с историей и устройствами, ноды с полным редактированием, трафик по Stats API самого Xray.</p>
+    </div>
+    <div class="feature reveal">
+      <div class="idx">03</div>
+      <h3>Мультинодовость в одну команду</h3>
+      <p>Добавил ноду в панели — получил одну bash-команду. Вставил на чистый сервер — сам ставит Xray, генерит ключи, регистрируется.</p>
+    </div>
+    <div class="feature reveal">
+      <div class="idx">04</div>
+      <h3>Протоколы на выбор</h3>
+      <p>VLESS Reality (TCP / gRPC / XHTTP), VLESS WS+TLS с реальным Let's Encrypt сертификатом, Hysteria2 отдельным процессом.</p>
+    </div>
+    <div class="feature reveal">
+      <div class="idx">05</div>
+      <h3>HWID-лимит устройств</h3>
+      <p>Ограничение числа устройств на подписку через заголовок клиента — опционально, как у Remnawave, но необязательно.</p>
+    </div>
+    <div class="feature reveal">
+      <div class="idx">06</div>
+      <h3>Платежи из коробки</h3>
+      <p>ЮKassa и Platega — опционально. Без них бот просто выдаёт подписку по кнопке, для своих или для теста.</p>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+  <section id="comparison">
+    <div class="section-label reveal">Сравнение</div>
+    <h2 class="reveal">Чем MBS Panel отличается</h2>
+    <p class="section-sub reveal">Честно, без "мы лучше всех" — Remnawave и Marzban старше, крупнее и во многом функциональнее. Вот где реальная разница, а не маркетинг.</p>
+    <div class="cmp-wrap reveal">
+      <table class="cmp">
+        <thead><tr><th>Функция</th><th class="us">MBS Panel</th><th>Remnawave</th><th>Marzban</th></tr></thead>
+        <tbody>
+          <tr><td>Telegram-бот — основной UX покупки</td><td class="us yes">✓</td><td class="no">только уведомления</td><td class="no">уведомления + команды</td></tr>
+          <tr><td>HWID-лимит устройств</td><td class="us yes">✓</td><td class="yes">✓</td><td class="no">—</td></tr>
+          <tr><td>База данных</td><td class="us">SQLite</td><td>PostgreSQL</td><td>на выбор</td></tr>
+          <tr><td>Установка</td><td class="us">1 bash-команда</td><td>Docker Compose</td><td>bash-скрипт / Docker</td></tr>
+          <tr><td>Backup & Restore в самой панели</td><td class="us"><span class="soon">в разработке</span></td><td class="no">community tools</td><td class="no">community tools</td></tr>
+          <tr><td>Xray config pre-flight проверка</td><td class="us yes">✓</td><td class="yes">full-featured</td><td class="no">только JSON-синтаксис</td></tr>
+          <tr><td>Лицензия</td><td class="us">MIT</td><td>AGPL-3.0</td><td>AGPL-3.0</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="cmp-note reveal">Данные по Remnawave/Marzban — из их собственной документации на момент публикации (<a href="https://docs.rw/overview/comparison-of-functions" target="_blank" style="text-decoration:underline">docs.rw</a>), проверяй актуальность сам, проекты активно развиваются.</p>
+  </section>
+</div>
+
+<div class="divider"></div>
+
+<div class="wrap">
+  <section>
+    <div class="section-label reveal">Как это работает</div>
+    <h2 class="reveal">Что происходит под капотом</h2>
+    <p class="section-sub reveal">Панель и первая VPN-нода живут на одном сервере. Дополнительные ноды подключаются по SSH — без агента, без открытых портов управления наружу.</p>
+    <div class="arch-diagram reveal">Telegram / браузер
+  │
+  ▼
+<span class="n">bot.py</span> (aiogram)  ──┐
+<span class="n">api.py</span> (FastAPI)  ──┼──▶ <span class="n">SQLite</span>
+  │                    │
+  ▼                    ▼
+локальный <span class="a">Xray</span>      SSH ──▶ <span class="a">Xray</span> на удалённой ноде
+                       (management-ключ, генерится сам)</div>
+    <div class="how-steps reveal">
+      <div class="how-step"><span>1</span>Устанавливаешь на чистый сервер — скрипт сам ставит Xray, nginx, certbot, генерит Reality-ключи, поднимает бота и API systemd-юнитами.</div>
+      <div class="how-step"><span>2</span>Бот — точка входа для юзеров: тарифы, гифт-коды, оплата (если включена). Подписка выдаётся сразу и добавляется в клиент по одной ссылке.</div>
+      <div class="how-step"><span>3</span>Админка — точка входа для тебя: ноды, юзеры, устройства, трафик по Stats API самого Xray. Всё через браузер, ничего руками на сервере.</div>
+      <div class="how-step"><span>4</span>Новую ноду добавляешь в панели — получаешь одну bash-команду. Вставляешь на чистый сервер, она сама ставит Xray и регистрируется — SSH-ключ панель добавляет туда сама, пароль не спрашивает ни разу.</div>
+    </div>
+    <div class="stack reveal" style="margin-top:28px">
+      <span>Python 3.10+</span><span>FastAPI</span><span>aiogram 3</span><span>SQLite (WAL)</span><span>paramiko</span><span>Xray-core</span>
+    </div>
+  </section>
+</div>
+
+<div class="divider"></div>
+
+<div class="wrap">
+  <section id="install">
+    <div class="section-label reveal">Как скачать и установить</div>
+    <h2 class="reveal">Чистый сервер → готовая панель за одну команду</h2>
+    <p class="section-sub reveal">Код открыт, MIT — клонируешь и ставишь на свой сервер, ничего не покупаешь и никуда не регистрируешься.</p>
+    <div class="how-steps reveal">
+      <div class="how-step"><span>1</span>Подними чистый сервер — <b>Ubuntu 22.04/24.04</b> или <b>Debian 11/12</b>, root-доступ — и три DNS A-записи на его IP: под панель, под подписку и под первую VPN-ноду.</div>
+      <div class="how-step"><span>2</span>Склонируй репозиторий и запусти install.sh от root — команда ниже.</div>
+      <div class="how-step"><span>3</span>Скрипт спросит домены и пароль админки, сам поставит Xray/nginx/certbot, сгенерит ключи и выпустит сертификаты.</div>
+      <div class="how-step"><span>4</span>Готово: бот отвечает в Telegram, сайт с подпиской и админка — на своих доменах. Обновления потом — командой <code class="inline">mbs update</code>.</div>
+    </div>
+    <div class="install reveal" style="max-width:none;margin-top:8px">
+      <code><span class="dim">$</span> git clone https://github.com/devsavsis/mbs-panel.git <span class="dim">&&</span> cd mbs-panel <span class="dim">&&</span> sudo bash install.sh</code>
+      <button class="copy-btn" onclick="copyInstall(this)">Копировать</button>
+    </div>
+  </section>
+
+  <div class="cta reveal">
+    <h2>Открытый исходник, MIT</h2>
+    <p class="section-sub">Изначально писалось под конкретный проект — получилось достаточно универсально, чтобы выложить как есть. Issues и PR приветствуются.</p>
+    <div class="cta-row">
+      <a class="btn" href="https://github.com/devsavsis/mbs-panel" target="_blank">github.com/devsavsis/mbs-panel</a>
+      <a class="btn ghost" href="https://github.com/devsavsis/mbs-panel#readme" target="_blank">Читать README</a>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <div class="wrap">
+    <div>MBS Panel — made by <a href="https://github.com/devsavsis" target="_blank">savsis</a></div>
+    <div><a href="https://github.com/devsavsis/mbs-panel/blob/main/LICENSE" target="_blank">MIT License</a></div>
+  </div>
+</footer>
+
+<script>
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach((e, i) => {
+      if (e.isIntersecting) {
+        e.target.style.transitionDelay = (i % 4) * 0.07 + "s";
+        e.target.classList.add("in");
+        io.unobserve(e.target);
+      }
+    });
+  }, { threshold: 0.12 });
+  document.querySelectorAll(".reveal").forEach((el) => io.observe(el));
+
+  function copyInstall(btn) {
+    const text = "git clone https://github.com/devsavsis/mbs-panel.git && cd mbs-panel && sudo bash install.sh";
+    navigator.clipboard.writeText(text).then(() => {
+      const orig = btn.textContent;
+      btn.textContent = "Скопировано";
+      btn.classList.add("copied");
+      setTimeout(() => { btn.textContent = orig; btn.classList.remove("copied"); }, 1600);
+    });
+  }
+</script>
+</body>
+</html>
