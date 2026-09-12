@@ -110,3 +110,75 @@ jobs:
 
           print("app wiring + payments + HWID logic OK")
           PYEOF
+
+      - name: Smoke test TOTP, backup/restore, node reorder, multi-admin, rate-limit
+        env:
+          BOT_TOKEN: "123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          BOT_USERNAME: "x"
+          ADMIN_IDS: "1"
+          ADMIN_PANEL_PASSWORD: "ci-test-password-not-real"
+          PANEL_DOMAIN: "panel.test"
+          SUB_DOMAIN: "sub.test"
+          SITE_DOMAIN: "test"
+          XRAY_PUBLIC_KEY: "x"
+          XRAY_SHORT_ID_TCP: "x"
+          XRAY_SHORT_ID_GRPC: "x"
+          XRAY_SHORT_ID_XHTTP: "x"
+        run: |
+          python - << 'PYEOF'
+          import base64
+          import db
+          import totp
+
+          raw_key = b"12345678901234567890"
+          secret = base64.b32encode(raw_key).decode("ascii").rstrip("=")
+          expected = ["755224","287082","359152","969429","338314","254676","287922","162583","399871","520489"]
+          for counter, exp in enumerate(expected):
+              assert totp._hotp(secret, counter) == exp, f"RFC 4226 vector failed at counter={counter}"
+          print("TOTP: all 10 RFC 4226 test vectors pass")
+
+          db.init_db()
+
+          db.create_node("n1", "Node One", "managed", "1.1.1.1", 443, "pub1", "sid1", "sni1", "xtls-rprx-vision")
+          db.create_node("n2", "Node Two", "managed", "2.2.2.2", 443, "pub2", "sid2", "sni2", "xtls-rprx-vision")
+          order = [n["code"] for n in db.list_nodes()]
+          assert order == ["de1", "n1", "n2"], order
+          db.reorder_nodes(["n2", "de1", "n1"])
+          assert [n["code"] for n in db.list_nodes()] == ["n2", "de1", "n1"]
+          try:
+              db.reorder_nodes(["n2", "de1"])
+              assert False, "should reject incomplete reorder list"
+          except ValueError:
+              pass
+          print("node reorder OK")
+
+          import backup
+          data = backup.create_backup()
+          db.create_node("n3", "Node Three", "managed", "3.3.3.3", 443, "pub3", "sid3", "sni3", "xtls-rprx-vision")
+          assert len(db.list_nodes()) == 4
+          backup.restore_backup(data)
+          assert len(db.list_nodes()) == 3, "restore should have reverted the extra node"
+          print("backup/restore round-trip OK")
+
+          admin = db.verify_admin_login("admin", "ci-test-password-not-real")
+          assert admin is not None
+          second = db.create_admin("second", "another-strong-password")
+          assert len(db.list_admins()) == 2
+          try:
+              db.delete_admin(admin["id"])
+              db.delete_admin(second["id"])
+              assert False, "should refuse deleting the last admin"
+          except ValueError:
+              pass
+          print("multi-admin OK")
+
+          ip = "203.0.113.9"
+          for _ in range(10):
+              db.record_login_attempt(ip, "password")
+          assert db.count_recent_login_attempts(ip, "password", minutes=15) >= 10
+          db.clear_login_attempts(ip, "password")
+          assert db.count_recent_login_attempts(ip, "password", minutes=15) == 0
+          print("rate-limit counters OK")
+
+          print("all v1.1.0 feature smoke tests passed")
+          PYEOF
