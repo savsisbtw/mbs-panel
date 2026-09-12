@@ -26,7 +26,70 @@ def _load():
         return json.load(f)
 
 
+class ConfigValidationError(Exception):
+    pass
+
+
+def _readable_by(path, uid, gid) -> bool:
+    try:
+        st = os.stat(path)
+    except OSError:
+        return False
+    mode = st.st_mode
+    if st.st_uid == uid and mode & 0o400:
+        return True
+    if st.st_gid == gid and mode & 0o040:
+        return True
+    if mode & 0o004:
+        return True
+    return False
+
+
+def check_cert_permissions(cfg, uid=65534, gid=65534) -> list:
+    problems = []
+    for ib in cfg.get("inbounds", []):
+        stream = ib.get("streamSettings") or {}
+        tls = stream.get("tlsSettings")
+        if not tls:
+            continue
+        for cert in tls.get("certificates") or []:
+            for key in ("certificateFile", "keyFile"):
+                path = cert.get(key)
+                if path and not _readable_by(path, uid, gid):
+                    problems.append(f"{ib.get('tag', '?')}: {key}={path} not readable by the xray service user")
+    return problems
+
+
+def validate_config(cfg, xray_bin="/usr/local/bin/xray") -> tuple:
+    tmp = XRAY_CONFIG_PATH + ".validate.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+    try:
+        result = subprocess.run(
+            [xray_bin, "run", "-test", "-format=json", "-config", tmp],
+            capture_output=True, text=True, timeout=15,
+        )
+        ok = result.returncode == 0
+        detail = (result.stdout + result.stderr).strip()
+    except Exception as e:
+        return False, str(e)
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    if not ok:
+        return False, detail
+    perm_problems = check_cert_permissions(cfg)
+    if perm_problems:
+        return False, "cert permission problem(s): " + "; ".join(perm_problems)
+    return True, detail
+
+
 def _save(cfg):
+    ok, detail = validate_config(cfg)
+    if not ok:
+        raise ConfigValidationError(detail)
     tmp = XRAY_CONFIG_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)

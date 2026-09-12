@@ -250,6 +250,10 @@ def _mgmt_connect(address: str, ssh_port: int = 22) -> paramiko.SSHClient:
     return client
 
 
+class RemoteConfigError(Exception):
+    pass
+
+
 def _remote_edit_clients(node: dict, mutate_fn):
     client = _mgmt_connect(node["address"])
     try:
@@ -265,14 +269,27 @@ def _remote_edit_clients(node: dict, mutate_fn):
             if new_clients is not None:
                 ib["settings"]["clients"] = new_clients
                 changed = True
-        if changed:
-            data = json.dumps(cfg, indent=2).encode()
-            with sftp.open("/usr/local/etc/xray/config.json", "wb") as f:
-                f.write(data)
+        if not changed:
             sftp.close()
-            client.exec_command("systemctl restart xray")[1].channel.recv_exit_status()
-        else:
+            return
+        data = json.dumps(cfg, indent=2).encode()
+        tmp_path = "/usr/local/etc/xray/config.json.validate.tmp"
+        with sftp.open(tmp_path, "wb") as f:
+            f.write(data)
+        _, stdout, stderr = client.exec_command(f"/usr/local/bin/xray run -test -format=json -config {tmp_path}", timeout=15)
+        test_exit = stdout.channel.recv_exit_status()
+        test_out = (stdout.read().decode(errors="replace") + stderr.read().decode(errors="replace")).strip()
+        if test_exit != 0:
+            client.exec_command(f"rm -f {tmp_path}")
             sftp.close()
+            raise RemoteConfigError(f"config test failed on {node['address']}: {test_out}")
+        client.exec_command(f"mv {tmp_path} /usr/local/etc/xray/config.json")[1].channel.recv_exit_status()
+        sftp.close()
+        _, stdout, stderr = client.exec_command("systemctl restart xray", timeout=20)
+        restart_exit = stdout.channel.recv_exit_status()
+        if restart_exit != 0:
+            err = stderr.read().decode(errors="replace").strip()
+            raise RemoteConfigError(f"xray restart failed on {node['address']}: {err}")
     finally:
         client.close()
 
