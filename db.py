@@ -61,6 +61,13 @@ CREATE TABLE IF NOT EXISTS admins (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS pending_totp (
+    token TEXT PRIMARY KEY,
+    admin_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS payments (
     id TEXT PRIMARY KEY,
     tg_id INTEGER NOT NULL,
@@ -124,6 +131,10 @@ _NEW_ADMIN_SESSION_COLUMNS = {
     "admin_id": "INTEGER",
 }
 
+_NEW_ADMIN_COLUMNS = {
+    "totp_secret": "TEXT",
+}
+
 
 def _migrate():
     with get_conn() as conn:
@@ -140,6 +151,10 @@ def _migrate():
         for name, decl in _NEW_ADMIN_SESSION_COLUMNS.items():
             if name not in scols:
                 conn.execute(f"ALTER TABLE admin_sessions ADD COLUMN {name} {decl}")
+        acols = {r["name"] for r in conn.execute("PRAGMA table_info(admins)").fetchall()}
+        for name, decl in _NEW_ADMIN_COLUMNS.items():
+            if name not in acols:
+                conn.execute(f"ALTER TABLE admins ADD COLUMN {name} {decl}")
         if needs_sort_order_backfill:
             rows = conn.execute(
                 "SELECT code FROM nodes ORDER BY (code='de1') DESC, created_at ASC"
@@ -481,6 +496,52 @@ def delete_admin(admin_id: int):
             raise ValueError("cannot delete the last remaining admin")
         conn.execute("DELETE FROM admins WHERE id=?", (admin_id,))
         conn.execute("DELETE FROM admin_sessions WHERE admin_id=?", (admin_id,))
+
+
+def get_admin_by_id(admin_id: int):
+    with get_conn() as conn:
+        row = conn.execute("SELECT id, username, created_at, totp_secret FROM admins WHERE id=?", (admin_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def verify_admin_password_by_id(admin_id: int, password: str) -> bool:
+    with get_conn() as conn:
+        row = conn.execute("SELECT password_hash FROM admins WHERE id=?", (admin_id,)).fetchone()
+        return bool(row) and _verify_password(password, row["password_hash"])
+
+
+def set_admin_totp_secret(admin_id: int, secret: str | None):
+    with get_conn() as conn:
+        conn.execute("UPDATE admins SET totp_secret=? WHERE id=?", (secret, admin_id))
+
+
+def create_pending_totp(admin_id: int, minutes: int = 5) -> str:
+    token = secrets.token_urlsafe(24)
+    expires = datetime.datetime.utcnow() + datetime.timedelta(minutes=minutes)
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO pending_totp (token, admin_id, created_at, expires_at) VALUES (?,?,?,?)",
+            (token, admin_id, now_iso(), expires.isoformat()),
+        )
+    return token
+
+
+def resolve_pending_totp(token: str):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM pending_totp WHERE token=? AND expires_at>?", (token, now_iso())
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def delete_pending_totp(token: str):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM pending_totp WHERE token=?", (token,))
+
+
+def delete_expired_pending_totp():
+    with get_conn() as conn:
+        conn.execute("DELETE FROM pending_totp WHERE expires_at<=?", (now_iso(),))
 
 
 def list_all_subscriptions(limit: int = 200):

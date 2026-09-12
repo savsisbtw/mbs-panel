@@ -281,11 +281,19 @@
       <div class="splash-title">MBS Panel</div>
       <div class="splash-tagline">made by savsis</div>
     </div>
-    <h1>Вход</h1>
-    <p>Логин и пароль администратора</p>
-    <input type="text" id="login-username" placeholder="Логин" value="admin" autocomplete="username" onkeydown="if(event.key==='Enter')document.getElementById('login-password').focus()">
-    <input type="password" id="login-password" placeholder="Пароль" autocomplete="current-password" onkeydown="if(event.key==='Enter')login()">
-    <button class="btn block" onclick="login()">Войти</button>
+    <div id="login-step-password">
+      <h1>Вход</h1>
+      <p>Логин и пароль администратора</p>
+      <input type="text" id="login-username" placeholder="Логин" value="admin" autocomplete="username" onkeydown="if(event.key==='Enter')document.getElementById('login-password').focus()">
+      <input type="password" id="login-password" placeholder="Пароль" autocomplete="current-password" onkeydown="if(event.key==='Enter')login()">
+      <button class="btn block" onclick="login()">Войти</button>
+    </div>
+    <div id="login-step-totp" style="display:none">
+      <h1>Код из приложения</h1>
+      <p>Двухфакторка включена — введи 6-значный код</p>
+      <input type="text" id="login-totp-code" placeholder="000000" maxlength="6" inputmode="numeric" autocomplete="one-time-code" onkeydown="if(event.key==='Enter')loginTotp()">
+      <button class="btn block" onclick="loginTotp()">Подтвердить</button>
+    </div>
     <div id="login-err"></div>
   </div>
 </div>
@@ -558,6 +566,27 @@
       </div>
 
       <div class="section" style="margin-top:20px">
+        <div class="section-head"><h2>Двухфакторная аутентификация</h2></div>
+        <p class="page-sub" style="margin-bottom:16px">Код из Google Authenticator/Authy/1Password при входе, в дополнение к паролю. Настраивается для твоего текущего логина.</p>
+        <div id="totp-status"></div>
+        <div id="totp-setup-box" style="display:none;margin-top:16px">
+          <p class="page-sub">Добавь в приложение-аутентификатор вручную (ключ) или скопируй ссылку:</p>
+          <div class="code-box"><span id="totp-secret-display"></span><button class="copy-btn" onclick="copyText(document.getElementById('totp-secret-display').textContent)">Копировать</button></div>
+          <div class="form-row" style="margin-top:12px">
+            <div><label class="f">Код из приложения</label><input type="text" id="totp-confirm-code" placeholder="000000" maxlength="6" inputmode="numeric"></div>
+            <div style="flex:0"><label class="f">&nbsp;</label><button class="btn" onclick="confirmEnableTotp()">Подтвердить</button></div>
+          </div>
+        </div>
+        <div id="totp-disable-box" style="display:none;margin-top:16px">
+          <div class="form-row">
+            <div><label class="f">Пароль (подтвердить отключение)</label><input type="password" id="totp-disable-password"></div>
+            <div style="flex:0"><label class="f">&nbsp;</label><button class="btn" style="background:var(--red)" onclick="confirmDisableTotp()">Отключить</button></div>
+          </div>
+        </div>
+        <div id="totp-result"></div>
+      </div>
+
+      <div class="section" style="margin-top:20px">
         <div class="section-head"><h2>Бэкап и восстановление</h2></div>
         <p class="page-sub" style="margin-bottom:16px">Бэкап — это база (юзеры, подписки, ноды, платежи) и <code>.env</code> одним файлом. Держи копии где-то отдельно от сервера.</p>
         <div class="form-row" style="align-items:flex-start">
@@ -593,6 +622,11 @@ async function api(path, opts) {
 function showLogin() {
   document.getElementById("login-screen").style.display = "flex";
   document.getElementById("app").classList.remove("show");
+  document.getElementById("login-step-password").style.display = "block";
+  document.getElementById("login-step-totp").style.display = "none";
+  document.getElementById("login-totp-code").value = "";
+  document.getElementById("login-password").value = "";
+  pendingTotpToken = null;
 }
 function showApp() {
   document.getElementById("login-screen").style.display = "none";
@@ -603,16 +637,37 @@ function showApp() {
   }).catch(() => {});
 }
 
+let pendingTotpToken = null;
+
 async function login() {
   const username = document.getElementById("login-username").value.trim();
   const password = document.getElementById("login-password").value;
   const err = document.getElementById("login-err");
   err.textContent = "";
   try {
-    await api("/admin/api/login", { method: "POST", body: JSON.stringify({ username, password }) });
+    const res = await api("/admin/api/login", { method: "POST", body: JSON.stringify({ username, password }) });
+    if (res.needs_totp) {
+      pendingTotpToken = res.pending_token;
+      document.getElementById("login-step-password").style.display = "none";
+      document.getElementById("login-step-totp").style.display = "block";
+      document.getElementById("login-totp-code").focus();
+      return;
+    }
     showApp();
   } catch (e) {
     err.textContent = "Неверный логин или пароль";
+  }
+}
+
+async function loginTotp() {
+  const code = document.getElementById("login-totp-code").value.trim();
+  const err = document.getElementById("login-err");
+  err.textContent = "";
+  try {
+    await api("/admin/api/login/totp", { method: "POST", body: JSON.stringify({ pending_token: pendingTotpToken, code }) });
+    showApp();
+  } catch (e) {
+    err.textContent = "Неверный код";
   }
 }
 async function logout() {
@@ -631,7 +686,7 @@ function showView(name) {
   if (name === "nodes") loadNodes();
   if (name === "traffic") loadTraffic();
   if (name === "payments") loadPayments();
-  if (name === "settings") { loadBotSettings(); loadAdmins(); }
+  if (name === "settings") { loadBotSettings(); loadAdmins(); loadTotpStatus(); }
 }
 
 const COUNTRIES = [
@@ -947,6 +1002,55 @@ async function deleteAdmin(id) {
     loadAdmins();
   } catch (e) {
     document.getElementById("admins-result").innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--red)">Не получилось: ' + esc(e.message) + '</p>';
+  }
+}
+
+async function loadTotpStatus() {
+  const status = document.getElementById("totp-status");
+  const setupBox = document.getElementById("totp-setup-box");
+  const disableBox = document.getElementById("totp-disable-box");
+  setupBox.style.display = "none";
+  disableBox.style.display = "none";
+  const s = await api("/admin/api/2fa/status");
+  if (s.enabled) {
+    status.innerHTML = '<p class="page-sub"><span class="badge ok">включена</span></p>';
+    status.innerHTML += '<button class="muted-btn" onclick="document.getElementById(\'totp-disable-box\').style.display=\'block\'">Отключить</button>';
+  } else {
+    status.innerHTML = '<p class="page-sub"><span class="badge bad">выключена</span></p>';
+    status.innerHTML += '<button class="btn" onclick="startEnableTotp()">Включить 2FA</button>';
+  }
+}
+
+async function startEnableTotp() {
+  const res = await api("/admin/api/2fa/setup", { method: "POST" });
+  document.getElementById("totp-secret-display").textContent = res.secret;
+  document.getElementById("totp-setup-box").dataset.secret = res.secret;
+  document.getElementById("totp-setup-box").style.display = "block";
+}
+
+async function confirmEnableTotp() {
+  const secret = document.getElementById("totp-setup-box").dataset.secret;
+  const code = document.getElementById("totp-confirm-code").value.trim();
+  const result = document.getElementById("totp-result");
+  try {
+    await api("/admin/api/2fa/enable", { method: "POST", body: JSON.stringify({ secret, code }) });
+    result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--green)">2FA включена</p>';
+    loadTotpStatus();
+  } catch (e) {
+    result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--red)">Неверный код</p>';
+  }
+}
+
+async function confirmDisableTotp() {
+  const password = document.getElementById("totp-disable-password").value;
+  const result = document.getElementById("totp-result");
+  try {
+    await api("/admin/api/2fa/disable", { method: "POST", body: JSON.stringify({ password }) });
+    result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--green)">2FA отключена</p>';
+    document.getElementById("totp-disable-password").value = "";
+    loadTotpStatus();
+  } catch (e) {
+    result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--red)">Неверный пароль</p>';
   }
 }
 

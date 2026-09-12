@@ -15,6 +15,7 @@ import db
 import links
 import nodeprov
 import payments
+import totp
 import xray_manager
 from config import (
     PLANS, PLANS_BY_CODE, SITE_DOMAIN, SUB_DOMAIN, PANEL_DOMAIN,
@@ -442,6 +443,25 @@ def admin_login(response: Response, body: dict = Body(...)):
     admin = db.verify_admin_login(username, password)
     if not admin:
         raise HTTPException(401, "wrong username or password")
+    if admin.get("totp_secret"):
+        pending_token = db.create_pending_totp(admin["id"])
+        return {"ok": True, "needs_totp": True, "pending_token": pending_token}
+    token = db.create_admin_session(admin["id"])
+    response.set_cookie(ADMIN_COOKIE, token, httponly=True, secure=True, samesite="strict", max_age=7 * 24 * 3600)
+    return {"ok": True}
+
+
+@app.post("/admin/api/login/totp")
+def admin_login_totp(response: Response, body: dict = Body(...)):
+    pending_token = body.get("pending_token") or ""
+    code = (body.get("code") or "").strip()
+    pending = db.resolve_pending_totp(pending_token)
+    if not pending:
+        raise HTTPException(401, "login session expired, log in again")
+    admin = db.get_admin_by_id(pending["admin_id"])
+    if not admin or not admin.get("totp_secret") or not totp.verify(admin["totp_secret"], code):
+        raise HTTPException(401, "wrong code")
+    db.delete_pending_totp(pending_token)
     token = db.create_admin_session(admin["id"])
     response.set_cookie(ADMIN_COOKIE, token, httponly=True, secure=True, samesite="strict", max_age=7 * 24 * 3600)
     return {"ok": True}
@@ -486,16 +506,56 @@ def admin_create_admin(request: Request, body: dict = Body(...)):
 
 @app.delete("/admin/api/admins/{admin_id}")
 def admin_delete_admin(admin_id: int, request: Request):
-    token = request.cookies.get(ADMIN_COOKIE)
-    current = db.get_session_admin(token)
-    if not current:
-        raise HTTPException(401, "unauthorized")
+    current = _require_current_admin(request)
     if current["id"] == admin_id:
         raise HTTPException(400, "cannot delete your own account while logged in as it")
     try:
         db.delete_admin(admin_id)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
+def _require_current_admin(request: Request):
+    token = request.cookies.get(ADMIN_COOKIE)
+    current = db.get_session_admin(token)
+    if not current:
+        raise HTTPException(401, "unauthorized")
+    return current
+
+
+@app.get("/admin/api/2fa/status")
+def admin_2fa_status(request: Request):
+    current = _require_current_admin(request)
+    admin = db.get_admin_by_id(current["id"])
+    return {"enabled": bool(admin and admin.get("totp_secret"))}
+
+
+@app.post("/admin/api/2fa/setup")
+def admin_2fa_setup(request: Request):
+    current = _require_current_admin(request)
+    secret = totp.generate_secret()
+    return {"secret": secret, "uri": totp.uri(secret, current["username"])}
+
+
+@app.post("/admin/api/2fa/enable")
+def admin_2fa_enable(request: Request, body: dict = Body(...)):
+    current = _require_current_admin(request)
+    secret = body.get("secret") or ""
+    code = (body.get("code") or "").strip()
+    if not secret or not totp.verify(secret, code):
+        raise HTTPException(400, "wrong code")
+    db.set_admin_totp_secret(current["id"], secret)
+    return {"ok": True}
+
+
+@app.post("/admin/api/2fa/disable")
+def admin_2fa_disable(request: Request, body: dict = Body(...)):
+    current = _require_current_admin(request)
+    password = body.get("password") or ""
+    if not db.verify_admin_password_by_id(current["id"], password):
+        raise HTTPException(401, "wrong password")
+    db.set_admin_totp_secret(current["id"], None)
     return {"ok": True}
 
 
