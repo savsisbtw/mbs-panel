@@ -370,6 +370,7 @@ async def periodic_sync():
         try:
             db.delete_expired_admin_sessions()
             db.delete_expired_pending_totp()
+            db.delete_old_login_attempts()
         except Exception:
             log.exception("expired admin session cleanup failed")
         await asyncio.sleep(90)

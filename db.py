@@ -68,6 +68,14 @@ CREATE TABLE IF NOT EXISTS pending_totp (
     expires_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS login_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ip TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_login_attempts_lookup ON login_attempts (ip, kind, created_at);
+
 CREATE TABLE IF NOT EXISTS payments (
     id TEXT PRIMARY KEY,
     tg_id INTEGER NOT NULL,
@@ -542,6 +550,35 @@ def delete_pending_totp(token: str):
 def delete_expired_pending_totp():
     with get_conn() as conn:
         conn.execute("DELETE FROM pending_totp WHERE expires_at<=?", (now_iso(),))
+
+
+def record_login_attempt(ip: str, kind: str):
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO login_attempts (ip, kind, created_at) VALUES (?,?,?)",
+            (ip, kind, now_iso()),
+        )
+
+
+def count_recent_login_attempts(ip: str, kind: str, minutes: int) -> int:
+    since = (datetime.datetime.utcnow() - datetime.timedelta(minutes=minutes)).isoformat()
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) c FROM login_attempts WHERE ip=? AND kind=? AND created_at>?",
+            (ip, kind, since),
+        ).fetchone()
+        return row["c"]
+
+
+def clear_login_attempts(ip: str, kind: str):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM login_attempts WHERE ip=? AND kind=?", (ip, kind))
+
+
+def delete_old_login_attempts(hours: int = 1):
+    cutoff = (datetime.datetime.utcnow() - datetime.timedelta(hours=hours)).isoformat()
+    with get_conn() as conn:
+        conn.execute("DELETE FROM login_attempts WHERE created_at<=?", (cutoff,))
 
 
 def list_all_subscriptions(limit: int = 200):

@@ -436,13 +436,22 @@ async def register_node(token: str, request: Request):
 
 
 
+def _client_ip(request: Request) -> str:
+    return request.headers.get("x-real-ip") or (request.client.host if request.client else "unknown")
+
+
 @app.post("/admin/api/login")
-def admin_login(response: Response, body: dict = Body(...)):
+def admin_login(request: Request, response: Response, body: dict = Body(...)):
+    ip = _client_ip(request)
+    if db.count_recent_login_attempts(ip, "password", minutes=15) >= 10:
+        raise HTTPException(429, "too many attempts, try again later")
     username = (body.get("username") or "").strip()
     password = body.get("password") or ""
     admin = db.verify_admin_login(username, password)
     if not admin:
+        db.record_login_attempt(ip, "password")
         raise HTTPException(401, "wrong username or password")
+    db.clear_login_attempts(ip, "password")
     if admin.get("totp_secret"):
         pending_token = db.create_pending_totp(admin["id"])
         return {"ok": True, "needs_totp": True, "pending_token": pending_token}
@@ -452,7 +461,10 @@ def admin_login(response: Response, body: dict = Body(...)):
 
 
 @app.post("/admin/api/login/totp")
-def admin_login_totp(response: Response, body: dict = Body(...)):
+def admin_login_totp(request: Request, response: Response, body: dict = Body(...)):
+    ip = _client_ip(request)
+    if db.count_recent_login_attempts(ip, "totp", minutes=5) >= 10:
+        raise HTTPException(429, "too many attempts, try again later")
     pending_token = body.get("pending_token") or ""
     code = (body.get("code") or "").strip()
     pending = db.resolve_pending_totp(pending_token)
@@ -460,7 +472,9 @@ def admin_login_totp(response: Response, body: dict = Body(...)):
         raise HTTPException(401, "login session expired, log in again")
     admin = db.get_admin_by_id(pending["admin_id"])
     if not admin or not admin.get("totp_secret") or not totp.verify(admin["totp_secret"], code):
+        db.record_login_attempt(ip, "totp")
         raise HTTPException(401, "wrong code")
+    db.clear_login_attempts(ip, "totp")
     db.delete_pending_totp(pending_token)
     token = db.create_admin_session(admin["id"])
     response.set_cookie(ADMIN_COOKIE, token, httponly=True, secure=True, samesite="strict", max_age=7 * 24 * 3600)
