@@ -172,7 +172,7 @@
       <a class="btn ghost" href="#install">Установка</a>
     </div>
     <div class="install reveal">
-      <code><span class="dim">$</span> git clone https://github.com/devsavsis/mbs-panel.git <span class="dim">&&</span> cd mbs-panel <span class="dim">&&</span> sudo bash install.sh</code>
+      <code><span class="dim">$</span> bash &lt;(curl -Ls https://mbs.savsis.xyz/install.sh)</code>
       <button class="copy-btn" onclick="copyInstall(this)">Копировать</button>
     </div>
   </section>
@@ -275,12 +275,12 @@
     <p class="section-sub reveal">Код открыт, MIT — клонируешь и ставишь на свой сервер, ничего не покупаешь и никуда не регистрируешься.</p>
     <div class="how-steps reveal">
       <div class="how-step"><span>1</span>Подними чистый сервер — <b>Ubuntu 22.04/24.04</b> или <b>Debian 11/12</b>, root-доступ — и три DNS A-записи на его IP: под панель, под подписку и под первую VPN-ноду.</div>
-      <div class="how-step"><span>2</span>Склонируй репозиторий и запусти install.sh от root — команда ниже.</div>
+      <div class="how-step"><span>2</span>Запусти установочный скрипт от root — одна команда ниже, сама подтянет исходники.</div>
       <div class="how-step"><span>3</span>Скрипт спросит домены и пароль админки, сам поставит Xray/nginx/certbot, сгенерит ключи и выпустит сертификаты.</div>
       <div class="how-step"><span>4</span>Готово: бот отвечает в Telegram, сайт с подпиской и админка — на своих доменах. Обновления потом — командой <code class="inline">mbs update</code>.</div>
     </div>
     <div class="install reveal" style="max-width:none;margin-top:8px">
-      <code><span class="dim">$</span> git clone https://github.com/devsavsis/mbs-panel.git <span class="dim">&&</span> cd mbs-panel <span class="dim">&&</span> sudo bash install.sh</code>
+      <code><span class="dim">$</span> bash &lt;(curl -Ls https://mbs.savsis.xyz/install.sh)</code>
       <button class="copy-btn" onclick="copyInstall(this)">Копировать</button>
     </div>
   </section>
@@ -315,7 +315,7 @@
   document.querySelectorAll(".reveal").forEach((el) => io.observe(el));
 
   function copyInstall(btn) {
-    const text = "git clone https://github.com/devsavsis/mbs-panel.git && cd mbs-panel && sudo bash install.sh";
+    const text = "bash <(curl -Ls https://mbs.savsis.xyz/install.sh)";
     navigator.clipboard.writeText(text).then(() => {
       const orig = btn.textContent;
       btn.textContent = "Скопировано";
