@@ -887,6 +887,9 @@ def admin_revoke_subscription(uuid: str, request: Request):
     if node:
         xray_manager.remove_client_from_node(node, uuid)
     db.revoke_subscription(uuid)
+    webhooks.send("subscription.revoked", {
+        "tg_id": sub["tg_id"], "node": sub["node"], "plan": sub["plan"], "subscription_uuid": uuid,
+    })
     return {"ok": True}
 
 
@@ -901,6 +904,9 @@ def admin_hold_subscription(uuid: str, request: Request):
     node = db.get_node(sub["node"])
     if node:
         xray_manager.remove_client_from_node(node, uuid)
+    webhooks.send("subscription.held", {
+        "tg_id": sub["tg_id"], "node": sub["node"], "plan": sub["plan"], "subscription_uuid": uuid,
+    })
     return {"ok": True}
 
 
@@ -913,6 +919,10 @@ def admin_resume_subscription(uuid: str, request: Request):
     node = db.get_node(resumed["node"])
     if node:
         xray_manager.add_client_to_node(node, uuid, email=uuid)
+    webhooks.send("subscription.resumed", {
+        "tg_id": resumed["tg_id"], "node": resumed["node"], "plan": resumed["plan"],
+        "subscription_uuid": uuid, "expires_at": resumed["expires_at"],
+    })
     return {"ok": True, "expires_at": resumed["expires_at"]}
 
 
