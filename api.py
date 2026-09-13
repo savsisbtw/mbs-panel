@@ -24,6 +24,7 @@ import xray_manager
 from config import SITE_DOMAIN, SUB_DOMAIN, PANEL_DOMAIN, ADMIN_PATH, BASE_DIR
 
 HWID_RE = re.compile(r"^[a-zA-Z0-9=-]{10,64}$")
+NODE_CODE_RE = re.compile(r"^[a-zA-Z0-9_-]{1,32}$")
 ENV_PATH = os.path.join(BASE_DIR, ".env")
 
 db.init_db()
@@ -1079,13 +1080,28 @@ def admin_reorder_nodes(request: Request, body: dict = Body(...)):
 @app.post("/admin/api/nodes")
 def admin_create_node(request: Request, body: dict = Body(...)):
     require_admin(request)
-    node = db.create_node(
-        code=body["code"], label=body["label"], kind=body.get("kind", "external"),
-        address=body["address"], port=int(body.get("port", 443)),
-        public_key=body["public_key"], short_id=body["short_id"],
-        sni=body["sni"], flow=body.get("flow", "xtls-rprx-vision"),
-        shared_uuid=body.get("shared_uuid"),
-    )
+    code = str(body.get("code", "")).strip()
+    if not NODE_CODE_RE.match(code):
+        raise HTTPException(400, "code: только буквы/цифры/-/_, от 1 до 32 символов")
+    label = str(body.get("label", "")).strip()
+    if not label:
+        raise HTTPException(400, "label не может быть пустым")
+    try:
+        port = int(body.get("port", 443))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "port должен быть числом")
+    if not (1 <= port <= 65535):
+        raise HTTPException(400, "port должен быть от 1 до 65535")
+    try:
+        node = db.create_node(
+            code=code, label=label, kind=body.get("kind", "external"),
+            address=body["address"], port=port,
+            public_key=body["public_key"], short_id=body["short_id"],
+            sni=body["sni"], flow=body.get("flow", "xtls-rprx-vision"),
+            shared_uuid=body.get("shared_uuid"),
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     webhooks.send("node.added", {"code": node["code"], "label": node["label"], "kind": node["kind"]})
     return node
 

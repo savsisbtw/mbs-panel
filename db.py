@@ -287,6 +287,8 @@ def reorder_nodes(codes: list):
 
 
 def create_node(code, label, kind, address, port, public_key, short_id, sni, flow, shared_uuid=None):
+    if get_node(code):
+        raise ValueError("node with this code already exists")
     with get_conn() as conn:
         next_order = _next_sort_order(conn)
         conn.execute(
