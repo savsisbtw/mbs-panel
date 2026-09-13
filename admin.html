@@ -656,6 +656,20 @@
         </div>
         <div id="backup-result"></div>
       </div>
+
+      <div class="section" style="margin-top:20px">
+        <div class="section-head"><h2>Webhook на события</h2></div>
+        <p class="page-sub" style="margin-bottom:16px">Панель сама постучится на твой URL при оплате или ручной выдаче подписки — для своих интеграций (CRM, аналитика, что угодно), без опроса API.</p>
+        <div class="form-row">
+          <div><label class="f">URL</label><input type="text" id="webhook-url" placeholder="https://example.com/hook"></div>
+          <div style="flex:0"><label class="f">&nbsp;</label><button class="btn" onclick="saveWebhookSettings()">Сохранить</button></div>
+        </div>
+        <p class="check-hint">
+          События: <code>payment.paid</code>, <code>subscription.granted_by_admin</code>. Тело — JSON <code>{"event": "...", "data": {...}}</code>, подписано заголовком <code>X-Signature</code> (HMAC-SHA256 от тела запроса на секрете ниже) — так получатель проверяет, что запрос реально от панели.
+          Секрет для проверки: <code id="webhook-secret-display">—</code>
+        </p>
+        <div id="webhook-result"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -740,7 +754,7 @@ function showView(name) {
   if (name === "nodes") loadNodes();
   if (name === "traffic") loadTraffic();
   if (name === "payments") { loadPayments(); loadPaymentsSettings(); }
-  if (name === "settings") { loadBotSettings(); loadAdmins(); loadTotpStatus(); }
+  if (name === "settings") { loadBotSettings(); loadAdmins(); loadTotpStatus(); loadWebhookSettings(); }
 }
 
 const COUNTRIES = [
@@ -1196,6 +1210,24 @@ async function confirmDisableTotp() {
     loadTotpStatus();
   } catch (e) {
     result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--red)">Неверный пароль</p>';
+  }
+}
+
+async function loadWebhookSettings() {
+  const res = await api("/admin/api/webhook-settings");
+  document.getElementById("webhook-url").value = res.url || "";
+  document.getElementById("webhook-secret-display").textContent = res.secret || "будет создан при сохранении URL";
+}
+
+async function saveWebhookSettings() {
+  const url = document.getElementById("webhook-url").value.trim();
+  const result = document.getElementById("webhook-result");
+  try {
+    await api("/admin/api/webhook-settings", { method: "POST", body: JSON.stringify({ url }) });
+    result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--green)">Сохранено</p>';
+    loadWebhookSettings();
+  } catch (e) {
+    result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--red)">Не получилось: ' + esc(e.message) + '</p>';
   }
 }
 

@@ -3,6 +3,7 @@ import datetime
 import json
 import os
 import re
+import secrets
 import subprocess
 import urllib.request
 from fastapi import FastAPI, HTTPException, Request, Response, File, UploadFile
@@ -17,6 +18,7 @@ import links
 import nodeprov
 import payments
 import totp
+import webhooks
 import xray_manager
 from config import (
     PLANS, PLANS_BY_CODE, SITE_DOMAIN, SUB_DOMAIN, PANEL_DOMAIN,
@@ -328,6 +330,15 @@ def _grant_paid_subscription(payment_id: str):
         f"Срок: {plan['label']} — до {sub['expires_at'][:10]}\n\n"
         f"Ссылка-подписка:\nhttps://{SUB_DOMAIN}/sub/{user['token']}",
     )
+    webhooks.send("payment.paid", {
+        "tg_id": payment["tg_id"],
+        "amount": payment["amount"],
+        "provider": payment["provider"],
+        "node": payment["node"],
+        "plan": payment["plan"],
+        "subscription_uuid": sub["uuid"],
+        "expires_at": sub["expires_at"],
+    })
 
 
 def _check_and_reconcile_payment(payment: dict) -> str:
@@ -454,6 +465,25 @@ def admin_set_platega_settings(request: Request, body: dict = Body(...)):
     except Exception:
         restarted = False
     return {"ok": True, "restarted_bot": restarted}
+
+
+@app.get("/admin/api/webhook-settings")
+def admin_get_webhook_settings(request: Request):
+    require_admin(request)
+    return {
+        "url": legal.read_env_var("WEBHOOK_URL", ""),
+        "secret": legal.read_env_var("WEBHOOK_SECRET", ""),
+    }
+
+
+@app.post("/admin/api/webhook-settings")
+def admin_set_webhook_settings(request: Request, body: dict = Body(...)):
+    require_admin(request)
+    url = (body.get("url") or "").strip()
+    _update_env_var("WEBHOOK_URL", url)
+    if url and not legal.read_env_var("WEBHOOK_SECRET", ""):
+        _update_env_var("WEBHOOK_SECRET", secrets.token_hex(24))
+    return {"url": legal.read_env_var("WEBHOOK_URL", ""), "secret": legal.read_env_var("WEBHOOK_SECRET", "")}
 
 
 @app.post("/payments/webhook/yookassa")
@@ -864,6 +894,10 @@ def admin_grant_subscription(tg_id: int, request: Request, body: dict = Body(...
     db.get_or_create_user(tg_id, None)
     sub = db.create_subscription(tg_id, node_code, plan["days"], plan_code, source="admin")
     xray_manager.add_client_to_node(node, sub["uuid"], email=sub["uuid"])
+    webhooks.send("subscription.granted_by_admin", {
+        "tg_id": tg_id, "node": node_code, "plan": plan_code,
+        "subscription_uuid": sub["uuid"], "expires_at": sub["expires_at"],
+    })
     return sub
 
 

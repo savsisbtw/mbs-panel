@@ -10,6 +10,7 @@ from aiogram.enums import ParseMode
 import db
 import links
 import payments
+import webhooks
 import xray_manager
 from config import BOT_TOKEN, ADMIN_IDS, PLANS, PLANS_BY_CODE, SUB_DOMAIN, SITE_DOMAIN, PAYMENTS_ENABLED
 
@@ -353,6 +354,15 @@ async def reconcile_pending_payments():
                 )
             except Exception:
                 log.exception("failed to notify user about payment")
+            await asyncio.to_thread(webhooks.send, "payment.paid", {
+                "tg_id": payment["tg_id"],
+                "amount": payment["amount"],
+                "provider": payment["provider"],
+                "node": payment["node"],
+                "plan": payment["plan"],
+                "subscription_uuid": sub["uuid"],
+                "expires_at": sub["expires_at"],
+            })
         elif status in payments.FAILED_STATUSES:
             db.mark_payment_failed(payment["id"])
 
