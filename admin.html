@@ -752,7 +752,15 @@ function esc(s) {
 async function api(path, opts) {
   const res = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", ...(opts && opts.headers) } });
   if (res.status === 401) { showLogin(); throw new Error("unauthorized"); }
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) {
+    const text = await res.text();
+    let message = text;
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed.detail === "string") message = parsed.detail;
+    } catch (e) {}
+    throw new Error(message);
+  }
   const ct = res.headers.get("content-type") || "";
   return ct.includes("application/json") ? res.json() : res.text();
 }

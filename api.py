@@ -530,6 +530,8 @@ def admin_get_webhook_settings(request: Request):
 def admin_set_webhook_settings(request: Request, body: dict = Body(...)):
     require_admin(request)
     url = (body.get("url") or "").strip()
+    if url and not (url.startswith("http://") or url.startswith("https://")):
+        raise HTTPException(400, "URL должен начинаться с http:// или https://")
     _update_env_var("WEBHOOK_URL", url)
     if url and not legal.read_env_var("WEBHOOK_SECRET", ""):
         _update_env_var("WEBHOOK_SECRET", secrets.token_hex(24))
