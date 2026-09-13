@@ -352,3 +352,35 @@ jobs:
 
           print("backup/restore correctly round-trips branding, live settings and held_at together OK")
           PYEOF
+
+      - name: Smoke test custom ADMIN_PATH actually moves the login page, not just adds a copy
+        env:
+          BOT_TOKEN: "123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          BOT_USERNAME: "x"
+          ADMIN_IDS: "1"
+          ADMIN_PANEL_PASSWORD: "ci-test-password-not-real"
+          PANEL_DOMAIN: "panel.test"
+          SUB_DOMAIN: "sub.test"
+          SITE_DOMAIN: "test"
+          XRAY_PUBLIC_KEY: "x"
+          XRAY_SHORT_ID_TCP: "x"
+          XRAY_SHORT_ID_GRPC: "x"
+          XRAY_SHORT_ID_XHTTP: "x"
+          ADMIN_PATH: "xyz123secret"
+        run: |
+          python - << 'PYEOF'
+          import api
+
+          paths = {r.path for r in api.app.routes}
+          assert "/xyz123secret" in paths, "custom ADMIN_PATH must be registered as a route"
+          assert "/admin" not in paths, "the default /admin page route must be GONE once a custom path is set, not just supplemented"
+          assert "/admin/api/login" in paths, "the API namespace must stay fixed regardless of ADMIN_PATH"
+
+          fake_request = type("FakeRequest", (), {"headers": {"host": "panel.test"}})()
+          root_response = api.root(fake_request)
+          assert isinstance(root_response, str), \
+              f"root() on PANEL_DOMAIN must return the rendered site page (a string), not admin.html, once ADMIN_PATH is customized — got {type(root_response)}"
+          assert "admin.html" not in root_response
+
+          print("custom ADMIN_PATH: old /admin route gone, new path registered, root() no longer leaks the panel OK")
+          PYEOF

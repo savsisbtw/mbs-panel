@@ -21,7 +21,7 @@ import settings
 import totp
 import webhooks
 import xray_manager
-from config import SITE_DOMAIN, SUB_DOMAIN, PANEL_DOMAIN, BASE_DIR
+from config import SITE_DOMAIN, SUB_DOMAIN, PANEL_DOMAIN, ADMIN_PATH, BASE_DIR
 
 HWID_RE = re.compile(r"^[a-zA-Z0-9=-]{10,64}$")
 ENV_PATH = os.path.join(BASE_DIR, ".env")
@@ -1193,12 +1193,13 @@ _NO_CACHE = {"Cache-Control": "no-cache, must-revalidate"}
 
 @app.get("/", response_class=HTMLResponse)
 def root(request: Request):
-    if request.headers.get("host", "").split(":")[0] == PANEL_DOMAIN:
+    host = request.headers.get("host", "").split(":")[0]
+    if host == PANEL_DOMAIN and ADMIN_PATH == "admin":
         return FileResponse(ADMIN_HTML_PATH, headers=_NO_CACHE)
     return legal.render_site_page("index.html")
 
 
-@app.get("/admin")
+@app.get(f"/{ADMIN_PATH}")
 def admin_page():
     return FileResponse(ADMIN_HTML_PATH, headers=_NO_CACHE)
 
