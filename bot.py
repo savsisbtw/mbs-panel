@@ -8,11 +8,11 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 import db
-import links
 import payments
+import settings
 import webhooks
 import xray_manager
-from config import BOT_TOKEN, ADMIN_IDS, PLANS, PLANS_BY_CODE, SUB_DOMAIN, SITE_DOMAIN, PAYMENTS_ENABLED
+from config import BOT_TOKEN, ADMIN_IDS, SUB_DOMAIN, SITE_DOMAIN
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("mbs-bot")
@@ -49,9 +49,10 @@ def nodes_kb(prefix: str) -> InlineKeyboardMarkup:
 
 
 def plans_kb(prefix: str, node_code: str) -> InlineKeyboardMarkup:
+    payments_enabled = settings.get_payment_settings()["payments_enabled"]
     rows = []
-    for p in PLANS:
-        label = f"{p['label']} — {p['price']} ₽" if PAYMENTS_ENABLED and p["price"] > 0 else p["label"]
+    for p in settings.get_plans():
+        label = f"{p['label']} — {p['price']} ₽" if payments_enabled and p["price"] > 0 else p["label"]
         rows.append([InlineKeyboardButton(text=label, callback_data=f"{prefix}:{node_code}:{p['code']}")])
     rows.append([InlineKeyboardButton(text="Назад", callback_data="menu:get")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -97,7 +98,7 @@ async def start_deeplink(message: Message, command: CommandObject):
         if err == "already_used":
             await message.answer("Этот код уже был использован.")
             return await send_main_menu(message)
-        plan = PLANS_BY_CODE.get(gift["plan"])
+        plan = settings.get_plans_by_code().get(gift["plan"])
         gift_node = db.get_node(gift["node"])
         if not plan or not gift_node:
             await message.answer("Этот подарок больше недоступен.")
@@ -162,10 +163,10 @@ def providers_kb(node_code: str, plan_code: str) -> InlineKeyboardMarkup:
 @dp.callback_query(F.data.startswith("plan:"))
 async def cb_plan(cb: CallbackQuery):
     _, node_code, plan_code = cb.data.split(":")
-    plan = PLANS_BY_CODE[plan_code]
+    plan = settings.get_plans_by_code()[plan_code]
     db.get_or_create_user(cb.from_user.id, cb.from_user.username)
 
-    if PAYMENTS_ENABLED and plan["price"] > 0 and payments.available_providers():
+    if settings.get_payment_settings()["payments_enabled"] and plan["price"] > 0 and payments.available_providers():
         await cb.message.edit_text(
             f"<b>{plan['label']}</b> — {plan['price']} ₽\n\nВыбери способ оплаты:",
             reply_markup=providers_kb(node_code, plan_code),
@@ -194,7 +195,7 @@ async def cb_plan(cb: CallbackQuery):
 @dp.callback_query(F.data.startswith("pay:"))
 async def cb_pay(cb: CallbackQuery):
     _, provider, node_code, plan_code = cb.data.split(":")
-    plan = PLANS_BY_CODE[plan_code]
+    plan = settings.get_plans_by_code()[plan_code]
     node_row = db.get_node(node_code)
     payment_id = payments.new_payment_id()
     db.create_payment(payment_id, cb.from_user.id, node_code, plan_code, provider, plan["price"])
@@ -228,8 +229,9 @@ async def cb_mysub(cb: CallbackQuery):
         return await cb.answer()
     lines = ["<b>Твои подписки</b>\n"]
     nodes_by_code = {n["code"]: n for n in db.list_nodes()}
+    plans_by_code = settings.get_plans_by_code()
     for s in subs:
-        plan = PLANS_BY_CODE.get(s["plan"], {}).get("label", s["plan"])
+        plan = plans_by_code.get(s["plan"], {}).get("label", s["plan"])
         node_info = nodes_by_code.get(s["node"])
         node = node_info["label"] if node_info else s["node"]
         lines.append(f"{node} — {plan}, до {s['expires_at'][:10]}")
@@ -284,7 +286,7 @@ async def cb_admin_giftmake(cb: CallbackQuery):
         me = await bot.get_me()
         _bot_username = me.username
     link = f"https://t.me/{_bot_username}?start=gift_{code}"
-    plan = PLANS_BY_CODE[plan_code]
+    plan = settings.get_plans_by_code()[plan_code]
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="В админку", callback_data="menu:admin")]])
     await cb.message.edit_text(
         f"Гифт-ссылка готова ({db.get_node(node_code)['label']}, {plan['label']}):\n\n"
@@ -325,9 +327,10 @@ async def cb_admin_sync(cb: CallbackQuery):
 
 
 async def reconcile_pending_payments():
-    if not PAYMENTS_ENABLED:
+    if not settings.get_payment_settings()["payments_enabled"]:
         return
     nodes_by_code = {n["code"]: n for n in db.list_nodes()}
+    plans_by_code = settings.get_plans_by_code()
     for payment in db.list_payments():
         if payment["status"] != "pending" or not payment.get("external_id"):
             continue
@@ -336,7 +339,7 @@ async def reconcile_pending_payments():
         except Exception:
             continue
         if status in payments.PAID_STATUSES:
-            plan = PLANS_BY_CODE.get(payment["plan"])
+            plan = plans_by_code.get(payment["plan"])
             node_row = nodes_by_code.get(payment["node"])
             if not plan or not node_row:
                 continue

@@ -5,20 +5,18 @@ import json
 import secrets
 import urllib.request
 
-from config import (
-    PANEL_DOMAIN,
-    YOOKASSA_ENABLED, YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY,
-    PLATEGA_ENABLED, PLATEGA_MERCHANT_ID, PLATEGA_SECRET,
-)
+from config import PANEL_DOMAIN
+import settings
 
 PROVIDER_NAMES = {"yookassa": "ЮKassa", "platega": "Platega"}
 
 
 def available_providers() -> list[str]:
+    enabled = settings.get_payment_settings()
     providers = []
-    if YOOKASSA_ENABLED:
+    if enabled["yookassa_enabled"]:
         providers.append("yookassa")
-    if PLATEGA_ENABLED:
+    if enabled["platega_enabled"]:
         providers.append("platega")
     return providers
 
@@ -41,7 +39,8 @@ def _get_json(url: str, headers: dict, timeout: int = 15) -> dict:
 
 
 def create_yookassa_payment(payment_id: str, amount_rub: int, description: str) -> str:
-    auth = base64.b64encode(f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}".encode()).decode()
+    shop_id, secret_key = settings.yookassa_credentials()
+    auth = base64.b64encode(f"{shop_id}:{secret_key}".encode()).decode()
     data = _post_json(
         "https://api.yookassa.ru/v3/payments",
         {
@@ -72,7 +71,8 @@ def verify_yookassa_notification(body: dict) -> bool:
 
 
 def check_yookassa_payment(external_id: str) -> str:
-    auth = base64.b64encode(f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}".encode()).decode()
+    shop_id, secret_key = settings.yookassa_credentials()
+    auth = base64.b64encode(f"{shop_id}:{secret_key}".encode()).decode()
     data = _get_json(
         f"https://api.yookassa.ru/v3/payments/{external_id}",
         {"Authorization": f"Basic {auth}"},
@@ -81,6 +81,7 @@ def check_yookassa_payment(external_id: str) -> str:
 
 
 def create_platega_payment(payment_id: str, amount_rub: int, description: str) -> str:
+    merchant_id, secret = settings.platega_credentials()
     data = _post_json(
         "https://app.platega.io/transaction/process",
         {
@@ -92,8 +93,8 @@ def create_platega_payment(payment_id: str, amount_rub: int, description: str) -
         },
         {
             "Content-Type": "application/json",
-            "X-MerchantId": PLATEGA_MERCHANT_ID,
-            "X-Secret": PLATEGA_SECRET,
+            "X-MerchantId": merchant_id,
+            "X-Secret": secret,
         },
     )
     external_id = data.get("id") or data.get("transactionId")
@@ -104,14 +105,16 @@ def create_platega_payment(payment_id: str, amount_rub: int, description: str) -
 def verify_platega_signature(raw_body: bytes, signature: str) -> bool:
     if not signature:
         return False
-    expected = hmac.new(PLATEGA_SECRET.encode(), raw_body, hashlib.sha256).hexdigest()
+    _, secret = settings.platega_credentials()
+    expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature)
 
 
 def check_platega_payment(external_id: str) -> str:
+    merchant_id, secret = settings.platega_credentials()
     data = _get_json(
         f"https://app.platega.io/transaction/{external_id}",
-        {"X-MerchantId": PLATEGA_MERCHANT_ID, "X-Secret": PLATEGA_SECRET},
+        {"X-MerchantId": merchant_id, "X-Secret": secret},
     )
     return data.get("status", "")
 

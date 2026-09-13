@@ -17,14 +17,11 @@ import legal
 import links
 import nodeprov
 import payments
+import settings
 import totp
 import webhooks
 import xray_manager
-from config import (
-    PLANS, PLANS_BY_CODE, SITE_DOMAIN, SUB_DOMAIN, PANEL_DOMAIN,
-    BOT_USERNAME, BOT_TOKEN, BASE_DIR,
-    HWID_LIMIT_ENABLED, HWID_FALLBACK_LIMIT,
-)
+from config import SITE_DOMAIN, SUB_DOMAIN, PANEL_DOMAIN, BOT_USERNAME, BOT_TOKEN, BASE_DIR
 
 HWID_RE = re.compile(r"^[a-zA-Z0-9=-]{10,64}$")
 ENV_PATH = os.path.join(BASE_DIR, ".env")
@@ -33,20 +30,7 @@ db.init_db()
 
 
 def _update_env_var(key: str, value: str):
-    lines = []
-    if os.path.exists(ENV_PATH):
-        with open(ENV_PATH, encoding="utf-8") as f:
-            lines = f.readlines()
-    found = False
-    for i, line in enumerate(lines):
-        if line.strip().startswith(f"{key}="):
-            lines[i] = f"{key}={value}\n"
-            found = True
-            break
-    if not found:
-        lines.append(f"{key}={value}\n")
-    with open(ENV_PATH, "w", encoding="utf-8") as f:
-        f.writelines(lines)
+    legal.update_env_var(key, value)
 
 app = FastAPI(title="mbs-api")
 
@@ -243,11 +227,12 @@ def get_subscription(token: str, request: Request):
         sub_url = f"https://{SUB_DOMAIN}/sub/{token}"
         return HTMLResponse(SUB_PAGE_TEMPLATE.format(sub_url=sub_url))
 
-    if HWID_LIMIT_ENABLED:
+    hwid_cfg = settings.get_hwid_settings()
+    if hwid_cfg["enabled"]:
         hwid = request.headers.get("x-hwid", "")
         if not HWID_RE.match(hwid):
             raise HTTPException(404, "hwid required")
-        limit = user["hwid_limit"] if user["hwid_limit"] is not None else HWID_FALLBACK_LIMIT
+        limit = user["hwid_limit"] if user["hwid_limit"] is not None else hwid_cfg["fallback_limit"]
         _, allowed = db.add_device_if_under_limit(
             user["tg_id"], hwid, limit,
             request.headers.get("x-device-os"),
@@ -267,9 +252,10 @@ def cabinet(token: str):
     if not user:
         raise HTTPException(404, "not found")
     subs = db.list_active_subscriptions(tg_id=user["tg_id"])
+    plans_by_code = settings.get_plans_by_code()
     out = []
     for s in subs:
-        plan = PLANS_BY_CODE.get(s["plan"])
+        plan = plans_by_code.get(s["plan"])
         out.append({
             "node": s["node"],
             "plan": s["plan"],
@@ -313,7 +299,7 @@ def _grant_paid_subscription(payment_id: str):
     payment = db.get_payment(payment_id)
     if not payment or payment["status"] == "paid":
         return
-    plan = PLANS_BY_CODE.get(payment["plan"])
+    plan = settings.get_plans_by_code().get(payment["plan"])
     node = db.get_node(payment["node"])
     if not plan or not node:
         return
@@ -361,10 +347,11 @@ def _check_and_reconcile_payment(payment: dict) -> str:
 def admin_list_payments(request: Request):
     require_admin(request)
     nodes_by_code = {n["code"]: n for n in db.list_nodes()}
+    plans_by_code = settings.get_plans_by_code()
     out = []
     for p in db.list_payments():
         node = nodes_by_code.get(p["node"])
-        plan = PLANS_BY_CODE.get(p["plan"])
+        plan = plans_by_code.get(p["plan"])
         out.append({
             **p,
             "node_label": node["label"] if node else p["node"],
@@ -406,10 +393,11 @@ def admin_set_legal_settings(request: Request, body: dict = Body(...)):
 @app.get("/admin/api/payments/yookassa-settings")
 def admin_get_yookassa_settings(request: Request):
     require_admin(request)
+    shop_id, secret_key = settings.yookassa_credentials()
     return {
-        "enabled": payments.YOOKASSA_ENABLED,
-        "shop_id": legal.read_env_var("YOOKASSA_SHOP_ID", ""),
-        "has_secret": bool(legal.read_env_var("YOOKASSA_SECRET_KEY", "")),
+        "enabled": settings.get_payment_settings()["yookassa_enabled"],
+        "shop_id": shop_id,
+        "has_secret": bool(secret_key),
     }
 
 
@@ -440,10 +428,11 @@ def admin_set_yookassa_settings(request: Request, body: dict = Body(...)):
 @app.get("/admin/api/payments/platega-settings")
 def admin_get_platega_settings(request: Request):
     require_admin(request)
+    merchant_id, secret = settings.platega_credentials()
     return {
-        "enabled": payments.PLATEGA_ENABLED,
-        "merchant_id": legal.read_env_var("PLATEGA_MERCHANT_ID", ""),
-        "has_secret": bool(legal.read_env_var("PLATEGA_SECRET", "")),
+        "enabled": settings.get_payment_settings()["platega_enabled"],
+        "merchant_id": merchant_id,
+        "has_secret": bool(secret),
     }
 
 
@@ -465,6 +454,62 @@ def admin_set_platega_settings(request: Request, body: dict = Body(...)):
     except Exception:
         restarted = False
     return {"ok": True, "restarted_bot": restarted}
+
+
+@app.get("/admin/api/payments/plan-settings")
+def admin_get_plan_settings(request: Request):
+    require_admin(request)
+    return {
+        "payments_enabled": settings.get_payment_settings()["payments_enabled"],
+        "plans": settings.get_plans(),
+    }
+
+
+@app.post("/admin/api/payments/plan-settings")
+def admin_set_plan_settings(request: Request, body: dict = Body(...)):
+    require_admin(request)
+    prices = body.get("prices") or {}
+    known_codes = settings.PRICE_ENV_KEYS.keys()
+    clean_prices = {}
+    for code, value in prices.items():
+        if code not in known_codes:
+            continue
+        try:
+            price = int(value)
+        except (TypeError, ValueError):
+            raise HTTPException(400, f"цена для тарифа {code} должна быть целым числом")
+        if price < 0:
+            raise HTTPException(400, f"цена для тарифа {code} не может быть отрицательной")
+        clean_prices[code] = price
+    settings.set_plan_prices(clean_prices)
+    if "payments_enabled" in body:
+        _update_env_var("PAYMENTS_ENABLED", "true" if body["payments_enabled"] else "false")
+    return {
+        "payments_enabled": settings.get_payment_settings()["payments_enabled"],
+        "plans": settings.get_plans(),
+    }
+
+
+@app.get("/admin/api/hwid-settings")
+def admin_get_hwid_settings(request: Request):
+    require_admin(request)
+    return settings.get_hwid_settings()
+
+
+@app.post("/admin/api/hwid-settings")
+def admin_set_hwid_settings(request: Request, body: dict = Body(...)):
+    require_admin(request)
+    if "enabled" in body:
+        _update_env_var("HWID_LIMIT_ENABLED", "true" if body["enabled"] else "false")
+    if "fallback_limit" in body:
+        try:
+            limit = int(body["fallback_limit"])
+        except (TypeError, ValueError):
+            raise HTTPException(400, "лимит устройств должен быть целым числом")
+        if not (1 <= limit <= 1000):
+            raise HTTPException(400, "лимит устройств должен быть от 1 до 1000")
+        _update_env_var("HWID_FALLBACK_LIMIT", str(limit))
+    return settings.get_hwid_settings()
 
 
 @app.get("/admin/api/webhook-settings")
@@ -813,10 +858,11 @@ def admin_subscriptions(request: Request, limit: int = 200):
     require_admin(request)
     subs = db.list_all_subscriptions(limit=limit)
     nodes_by_code = {n["code"]: n for n in db.list_nodes()}
+    plans_by_code = settings.get_plans_by_code()
     out = []
     for s in subs:
         node = nodes_by_code.get(s["node"])
-        plan = PLANS_BY_CODE.get(s["plan"])
+        plan = plans_by_code.get(s["plan"])
         out.append({
             **s,
             "node_label": node["label"] if node else s["node"],
@@ -860,10 +906,11 @@ def admin_user_card(tg_id: int, request: Request):
         raise HTTPException(404, "not found")
     subs = db.list_subscriptions_for_user(tg_id)
     nodes_by_code = {n["code"]: n for n in db.list_nodes()}
+    plans_by_code = settings.get_plans_by_code()
     out_subs = []
     for s in subs:
         node = nodes_by_code.get(s["node"])
-        plan = PLANS_BY_CODE.get(s["plan"])
+        plan = plans_by_code.get(s["plan"])
         out_subs.append({
             **s,
             "node_label": node["label"] if node else s["node"],
@@ -878,7 +925,7 @@ def admin_user_card(tg_id: int, request: Request):
         "subscriptions": out_subs,
         "devices": db.list_devices(tg_id),
         "hwid_limit": user.get("hwid_limit"),
-        "hwid_fallback_limit": HWID_FALLBACK_LIMIT,
+        "hwid_fallback_limit": settings.get_hwid_settings()["fallback_limit"],
     }
 
 
@@ -888,7 +935,7 @@ def admin_grant_subscription(tg_id: int, request: Request, body: dict = Body(...
     node_code = body.get("node")
     plan_code = body.get("plan")
     node = db.get_node(node_code)
-    plan = PLANS_BY_CODE.get(plan_code)
+    plan = settings.get_plans_by_code().get(plan_code)
     if not node or not plan:
         raise HTTPException(400, "unknown node or plan")
     db.get_or_create_user(tg_id, None)
@@ -907,7 +954,7 @@ def admin_list_devices(tg_id: int, request: Request):
     return {
         "devices": db.list_devices(tg_id),
         "limit": db.get_or_create_user(tg_id, None).get("hwid_limit"),
-        "fallback_limit": HWID_FALLBACK_LIMIT,
+        "fallback_limit": settings.get_hwid_settings()["fallback_limit"],
     }
 
 
@@ -932,10 +979,11 @@ def admin_gift_codes(request: Request):
     require_admin(request)
     codes = db.list_gift_codes()
     nodes_by_code = {n["code"]: n for n in db.list_nodes()}
+    plans_by_code = settings.get_plans_by_code()
     out = []
     for c in codes:
         node = nodes_by_code.get(c["node"])
-        plan = PLANS_BY_CODE.get(c["plan"])
+        plan = plans_by_code.get(c["plan"])
         out.append({
             **c,
             "node_label": node["label"] if node else c["node"],
@@ -949,7 +997,7 @@ def admin_gift_codes(request: Request):
 def admin_create_gift_code(request: Request, body: dict = Body(...)):
     require_admin(request)
     node, plan = body.get("node"), body.get("plan")
-    if node not in {n["code"] for n in db.list_nodes()} or plan not in PLANS_BY_CODE:
+    if node not in {n["code"] for n in db.list_nodes()} or plan not in settings.get_plans_by_code():
         raise HTTPException(400, "invalid node/plan")
     code = db.create_gift_code(node, plan, created_by=0)
     return {"code": code, "link": f"https://t.me/{BOT_USERNAME}?start=gift_{code}"}
@@ -958,7 +1006,7 @@ def admin_create_gift_code(request: Request, body: dict = Body(...)):
 @app.get("/admin/api/plans")
 def admin_plans(request: Request):
     require_admin(request)
-    return PLANS
+    return settings.get_plans()
 
 
 

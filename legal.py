@@ -9,19 +9,47 @@ SITE_DIR = os.path.join(BASE_DIR, "site")
 FIELD_KEYS = ["LEGAL_NAME", "LEGAL_INN", "REFUND_HOURS", "SUPPORT_CONTACT", "SUPPORT_EMAIL", "OFFER_EFFECTIVE_DATE"]
 
 
-def read_env_var(key: str, default: str = "") -> str:
+def read_env_vars(keys: list) -> dict:
+    result = {key: None for key in keys}
     if not os.path.exists(ENV_PATH):
-        return default
+        return result
+    wanted = set(keys)
     with open(ENV_PATH, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            if line.startswith(f"{key}="):
-                return line[len(key) + 1:]
-    return default
+            if "=" not in line or line.startswith("#"):
+                continue
+            key, _, value = line.partition("=")
+            if key in wanted and result[key] is None:
+                result[key] = value
+    return result
+
+
+def read_env_var(key: str, default: str = "") -> str:
+    value = read_env_vars([key])[key]
+    return default if value is None else value
+
+
+def update_env_var(key: str, value: str):
+    lines = []
+    if os.path.exists(ENV_PATH):
+        with open(ENV_PATH, encoding="utf-8") as f:
+            lines = f.readlines()
+    found = False
+    for i, line in enumerate(lines):
+        if line.strip().startswith(f"{key}="):
+            lines[i] = f"{key}={value}\n"
+            found = True
+            break
+    if not found:
+        lines.append(f"{key}={value}\n")
+    with open(ENV_PATH, "w", encoding="utf-8") as f:
+        f.writelines(lines)
 
 
 def get_settings() -> dict:
-    return {key: read_env_var(key) for key in FIELD_KEYS}
+    raw = read_env_vars(FIELD_KEYS)
+    return {key: (raw[key] or "") for key in FIELD_KEYS}
 
 
 def _fallback(label: str) -> str:

@@ -539,7 +539,7 @@
           <div><label class="f">Секретный ключ</label><input type="password" id="yk-secret-key" placeholder="live_..."></div>
           <div style="flex:0"><label class="f">&nbsp;</label><button class="btn" onclick="saveYookassaSettings()">Проверить и сохранить</button></div>
         </div>
-        <p class="check-hint">Панель сама постучится в ЮKassa (<code>/v3/me</code>) и сохранит ключи только если они рабочие. После сохранения включаются приём оплаты и вебхуки; бот перезапустится сам, для самой панели (обработка вебхуков) один раз выполни на сервере <code>mbs restart</code>.</p>
+        <p class="check-hint">Панель сама постучится в ЮKassa (<code>/v3/me</code>) и сохранит ключи только если они рабочие. После сохранения сразу включаются приём оплаты и приём вебхуков — без рестарта; бот на всякий случай перезапускается сам, чтобы кнопки оплаты в Telegram тоже обновились немедленно.</p>
         <div id="yookassa-result"></div>
 
         <h3 style="font-size:14px;margin:24px 0 12px">Platega — ключи API</h3>
@@ -549,8 +549,19 @@
           <div><label class="f">Секрет</label><input type="password" id="pg-secret" placeholder="secret_..."></div>
           <div style="flex:0"><label class="f">&nbsp;</label><button class="btn" onclick="savePlategaSettings()">Сохранить</button></div>
         </div>
-        <p class="check-hint">У Platega нет публичного эндпоинта для проверки ключей без реального платежа, так что сохраняется без предварительной проверки — если ключи неверные, это будет видно по первой неудачной оплате. Тот же рестарт нужен, что и для ЮKassa.</p>
+        <p class="check-hint">У Platega нет публичного эндпоинта для проверки ключей без реального платежа, так что сохраняется без предварительной проверки — если ключи неверные, это будет видно по первой неудачной оплате. Применяется сразу, без рестарта.</p>
         <div id="platega-result"></div>
+      </div>
+
+      <div class="section" style="margin-top:20px">
+        <div class="section-head"><h2>Тарифы</h2></div>
+        <p class="page-sub" style="margin-bottom:16px">Цены по срокам подписки и общий приём оплаты — меняются здесь, применяются сразу, рестарт не нужен.</p>
+        <label class="check"><input type="checkbox" id="plan-payments-enabled"> Принимать оплату (если выключено — бот всегда выдаёт подписку бесплатно, как без платёжки вообще)</label>
+        <div class="form-row" style="margin-top:12px" id="plan-price-inputs"></div>
+        <div class="form-row" style="margin-top:12px">
+          <button class="btn" onclick="savePlanSettings()">Сохранить тарифы</button>
+        </div>
+        <div id="plan-settings-result"></div>
       </div>
 
       <div class="section" style="margin-top:20px">
@@ -595,6 +606,12 @@
         <p>Вкладка Платежи → «Настройка приёма платежей» собирает публичную оферту и политику конфиденциальности (<code>/offer</code>, <code>/privacy</code>) из введённых реквизитов — ЮKassa их спросит при регистрации магазина. Дата вступления в силу проставляется один раз, правки реквизитов её не двигают.</p>
         <p>Ключи ЮKassa проверяются вживую через их <code>/v3/me</code> перед сохранением; у Platega такого эндпоинта нет, ключи сохраняются без проверки. Оба провайдера включаются независимо.</p>
         <p>Исходящие вебхуки (Настройки → Webhook на события) — панель стучится на указанный URL при оплате (<code>payment.paid</code>) и ручной выдаче подписки админом (<code>subscription.granted_by_admin</code>), тело подписано <code>X-Signature</code> (HMAC-SHA256). Секрет выдаётся один раз и не меняется при правке URL — для интеграций со своими системами, без опроса API.</p>
+        <p>Вкладка Платежи → «Тарифы» — цены по срокам и общий рубильник приёма оплаты. Как и реквизиты с ключами провайдеров, это читается панелью напрямую из <code>.env</code> при каждом запросе — правки в UI применяются мгновенно везде (бот, API, проверка вебхуков), рестарт панели нигде не требуется.</p>
+      </div>
+
+      <div class="doc-block">
+        <h2>Лимит устройств (HWID)</h2>
+        <p>Настройки → «Лимит устройств» — глобальный рубильник и лимит по умолчанию (как у Remnawave: клиент шлёт заголовок <code>x-hwid</code> при запросе конфига, панель запоминает первые N уникальных устройств на юзера и отказывает новым сверх лимита). У конкретного юзера лимит можно переопределить отдельно — в его карточке (Подписки → кнопка «Карточка» → таб «Устройства»), это имеет приоритет над глобальным значением по умолчанию.</p>
       </div>
 
       <div class="doc-block">
@@ -684,6 +701,18 @@
         </p>
         <div id="webhook-result"></div>
       </div>
+
+      <div class="section" style="margin-top:20px">
+        <div class="section-head"><h2>Лимит устройств (HWID)</h2></div>
+        <p class="page-sub" style="margin-bottom:16px">Ограничивает число разных устройств на одну подписку — как у Remnawave. У конкретного юзера лимит можно переопределить в его карточке, это значение — только дефолт для тех, у кого свой не задан.</p>
+        <label class="check"><input type="checkbox" id="hwid-enabled"> Включить лимит устройств</label>
+        <div class="form-row" style="margin-top:12px">
+          <div><label class="f">Лимит устройств по умолчанию</label><input type="text" id="hwid-fallback-limit" placeholder="3"></div>
+          <div style="flex:0"><label class="f">&nbsp;</label><button class="btn" onclick="saveHwidSettings()">Сохранить</button></div>
+        </div>
+        <p class="check-hint">Применяется сразу, без рестарта панели.</p>
+        <div id="hwid-result"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -768,7 +797,7 @@ function showView(name) {
   if (name === "nodes") loadNodes();
   if (name === "traffic") loadTraffic();
   if (name === "payments") { loadPayments(); loadPaymentsSettings(); }
-  if (name === "settings") { loadBotSettings(); loadAdmins(); loadTotpStatus(); loadWebhookSettings(); }
+  if (name === "settings") { loadBotSettings(); loadAdmins(); loadTotpStatus(); loadWebhookSettings(); loadHwidSettings(); }
 }
 
 const COUNTRIES = [
@@ -1038,10 +1067,11 @@ async function checkPayment(id, btn) {
 }
 
 async function loadPaymentsSettings() {
-  const [legalRes, ykRes, pgRes] = await Promise.all([
+  const [legalRes, ykRes, pgRes, planRes] = await Promise.all([
     api("/admin/api/payments/legal-settings"),
     api("/admin/api/payments/yookassa-settings"),
     api("/admin/api/payments/platega-settings"),
+    api("/admin/api/payments/plan-settings"),
   ]);
   document.getElementById("legal-name").value = legalRes.LEGAL_NAME || "";
   document.getElementById("legal-inn").value = legalRes.LEGAL_INN || "";
@@ -1064,6 +1094,11 @@ async function loadPaymentsSettings() {
   } else {
     pgStatus.innerHTML = '<span class="badge bad">не настроена</span>';
   }
+
+  document.getElementById("plan-payments-enabled").checked = !!planRes.payments_enabled;
+  document.getElementById("plan-price-inputs").innerHTML = planRes.plans.map((p) => `
+    <div><label class="f">${esc(p.label)}</label><input type="text" data-plan-code="${esc(p.code)}" class="plan-price-input" value="${p.price}"></div>
+  `).join("");
 }
 
 async function saveLegalSettings() {
@@ -1090,8 +1125,8 @@ async function saveYookassaSettings() {
   if (!shop_id || !secret_key) return;
   result.innerHTML = '<p class="page-sub" style="margin-top:10px">Проверяю ключи у ЮKassa…</p>';
   try {
-    const res = await api("/admin/api/payments/yookassa-settings", { method: "POST", body: JSON.stringify({ shop_id, secret_key }) });
-    result.innerHTML = `<p class="page-sub" style="margin-top:10px;color:var(--green)">Ключи рабочие, сохранено.${res.restarted_bot ? " Бот перезапущен." : " Бот сам не перезапустился — выполни mbs restart."} Для приёма вебхуков панелью выполни на сервере <code>mbs restart</code>.</p>`;
+    await api("/admin/api/payments/yookassa-settings", { method: "POST", body: JSON.stringify({ shop_id, secret_key }) });
+    result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--green)">Ключи рабочие, сохранено — бот и приём вебхуков подхватывают их сразу, рестарт не нужен.</p>';
     document.getElementById("yk-secret-key").value = "";
     loadPaymentsSettings();
   } catch (e) {
@@ -1105,10 +1140,51 @@ async function savePlategaSettings() {
   const result = document.getElementById("platega-result");
   if (!merchant_id || !secret) return;
   try {
-    const res = await api("/admin/api/payments/platega-settings", { method: "POST", body: JSON.stringify({ merchant_id, secret }) });
-    result.innerHTML = `<p class="page-sub" style="margin-top:10px;color:var(--green)">Сохранено.${res.restarted_bot ? " Бот перезапущен." : " Бот сам не перезапустился — выполни mbs restart."} Для приёма вебхуков панелью выполни на сервере <code>mbs restart</code>.</p>`;
+    await api("/admin/api/payments/platega-settings", { method: "POST", body: JSON.stringify({ merchant_id, secret }) });
+    result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--green)">Сохранено — бот и приём вебхуков подхватывают ключи сразу, рестарт не нужен.</p>';
     document.getElementById("pg-secret").value = "";
     loadPaymentsSettings();
+  } catch (e) {
+    result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--red)">Не получилось: ' + esc(e.message) + '</p>';
+  }
+}
+
+async function savePlanSettings() {
+  const result = document.getElementById("plan-settings-result");
+  const prices = {};
+  document.querySelectorAll(".plan-price-input").forEach((el) => {
+    prices[el.dataset.planCode] = el.value.trim();
+  });
+  const body = {
+    payments_enabled: document.getElementById("plan-payments-enabled").checked,
+    prices,
+  };
+  try {
+    await api("/admin/api/payments/plan-settings", { method: "POST", body: JSON.stringify(body) });
+    result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--green)">Сохранено — применилось сразу, без рестарта</p>';
+    loadPaymentsSettings();
+  } catch (e) {
+    result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--red)">Не получилось: ' + esc(e.message) + '</p>';
+  }
+}
+
+async function loadHwidSettings() {
+  const res = await api("/admin/api/hwid-settings");
+  document.getElementById("hwid-enabled").checked = !!res.enabled;
+  document.getElementById("hwid-fallback-limit").value = res.fallback_limit;
+  document.getElementById("hwid-result").innerHTML = "";
+}
+
+async function saveHwidSettings() {
+  const result = document.getElementById("hwid-result");
+  const body = {
+    enabled: document.getElementById("hwid-enabled").checked,
+    fallback_limit: document.getElementById("hwid-fallback-limit").value.trim(),
+  };
+  try {
+    await api("/admin/api/hwid-settings", { method: "POST", body: JSON.stringify(body) });
+    result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--green)">Сохранено — применилось сразу, без рестарта</p>';
+    loadHwidSettings();
   } catch (e) {
     result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--red)">Не получилось: ' + esc(e.message) + '</p>';
   }

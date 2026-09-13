@@ -182,3 +182,61 @@ jobs:
 
           print("all v1.1.0 feature smoke tests passed")
           PYEOF
+
+      - name: Smoke test live settings (.env-backed plans/toggles/HWID/credentials, no restart)
+        env:
+          BOT_TOKEN: "123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          BOT_USERNAME: "x"
+          ADMIN_IDS: "1"
+          ADMIN_PANEL_PASSWORD: "ci-test-password-not-real"
+          PANEL_DOMAIN: "panel.test"
+          SUB_DOMAIN: "sub.test"
+          SITE_DOMAIN: "test"
+          XRAY_PUBLIC_KEY: "x"
+          XRAY_SHORT_ID_TCP: "x"
+          XRAY_SHORT_ID_GRPC: "x"
+          XRAY_SHORT_ID_XHTTP: "x"
+        run: |
+          python - << 'PYEOF'
+          import hashlib
+          import hmac
+
+          with open(".env", "a", encoding="utf-8") as f:
+              f.write("PLATEGA_SECRET=old_secret\n")
+              f.write("PLATEGA_ENABLED=true\n")
+              f.write("PLATEGA_MERCHANT_ID=m1\n")
+
+          import legal
+          import settings
+          import payments
+
+          plans = settings.get_plans_by_code()
+          assert plans["1m"]["price"] > 0, "default price should come from config before any .env override"
+
+          settings.set_plan_prices({"1m": 4242})
+          assert settings.get_plans_by_code()["1m"]["price"] == 4242, "price edit should apply live, no reimport"
+          assert settings.get_plans_by_code()["7d"]["price"] != 4242, "unrelated plan must stay untouched"
+
+          assert settings.get_hwid_settings()["enabled"] is False
+          legal.update_env_var("HWID_LIMIT_ENABLED", "true")
+          legal.update_env_var("HWID_FALLBACK_LIMIT", "9")
+          hwid = settings.get_hwid_settings()
+          assert hwid["enabled"] is True and hwid["fallback_limit"] == 9, "HWID settings should apply live"
+
+          body = b'{"transactionId":"t1","status":"CONFIRMED"}'
+          sig_old = hmac.new(b"old_secret", body, hashlib.sha256).hexdigest()
+          assert payments.verify_platega_signature(body, sig_old), "signature must verify against the current secret"
+
+          legal.update_env_var("PLATEGA_SECRET", "rotated_secret")
+          assert not payments.verify_platega_signature(body, sig_old), "OLD signature must be rejected right after rotation, same process, no restart"
+          sig_new = hmac.new(b"rotated_secret", body, hashlib.sha256).hexdigest()
+          assert payments.verify_platega_signature(body, sig_new), "NEW signature must verify immediately after rotation, same process, no restart"
+
+          for _ in range(5):
+              legal.update_env_var("HWID_FALLBACK_LIMIT", "9")
+          with open(".env", encoding="utf-8") as f:
+              lines = [l for l in f.readlines() if l.startswith("HWID_FALLBACK_LIMIT=")]
+          assert len(lines) == 1, "repeated writes to the same key must not duplicate .env lines"
+
+          print("live settings: prices/HWID/credential-rotation all apply with zero reimport OK")
+          PYEOF
