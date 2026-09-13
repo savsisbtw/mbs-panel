@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MBS Panel</title>
+<title>{{BRAND_NAME}}</title>
 <style>
   :root {
     --bg: #0a0b0f; --card: #131519; --border: #1e2128;
@@ -117,7 +117,7 @@
 <body>
 <div class="wrap">
   <header>
-    <div class="logo">MBS Panel</div>
+    <div class="logo">{{BRAND_NAME}}</div>
     <nav>
       <a href="#features">Возможности</a>
       <a href="#plans">Тарифы</a>
@@ -128,7 +128,7 @@
   <section class="hero">
     <h1 class="reveal">Интернет без границ<br><span class="accent">и без замедлений</span></h1>
     <p class="reveal">Быстрый доступ к любимым сайтам и сервисам. Трафик не отличить от обычного HTTPS, скорость — на выделенных мощностях.</p>
-    <a class="btn reveal" href="https://t.me/YourBot_robot" target="_blank">Получить доступ</a>
+    <a class="btn reveal" href="https://t.me/{{BOT_USERNAME}}" target="_blank">Получить доступ</a>
   </section>
 </div>
 
@@ -164,23 +164,19 @@
 
   <section class="plans" id="plans">
     <h2 class="reveal">Тарифы</h2>
-    <div class="plan-row reveal">
-      <div class="plan"><div class="d">7 дней</div><div class="l">пробный</div></div>
-      <div class="plan"><div class="d">1 месяц</div><div class="l">стандарт</div></div>
-      <div class="plan"><div class="d">3 месяца</div><div class="l">выгодно</div></div>
-      <div class="plan"><div class="d">6 месяцев</div><div class="l">выгоднее</div></div>
-      <div class="plan"><div class="d">1 год</div><div class="l">максимум</div></div>
+    <div class="plan-row reveal" id="plan-row">
+      <div class="plan"><div class="d">…</div></div>
     </div>
   </section>
 
   <div class="cta reveal">
-    <a class="btn ghost" href="https://t.me/YourBot_robot" target="_blank">Выбрать тариф в боте</a>
+    <a class="btn ghost" href="https://t.me/{{BOT_USERNAME}}" target="_blank">Выбрать тариф в боте</a>
   </div>
 </div>
 
 <footer>
   <div class="wrap">
-    example.com — <a href="/cabinet.html">личный кабинет</a> — подписка через <a href="https://sub.example.com" target="_blank">sub.example.com</a> — <a href="/offer.html">оферта</a> — <a href="/privacy.html">конфиденциальность</a>
+    {{SITE_DOMAIN}} — <a href="/cabinet.html">личный кабинет</a> — подписка через <a href="https://{{SUB_DOMAIN}}" target="_blank">{{SUB_DOMAIN}}</a> — <a href="/offer">оферта</a> — <a href="/privacy">конфиденциальность</a>
   </div>
 </footer>
 
@@ -195,6 +191,22 @@
     });
   }, { threshold: 0.15 });
   document.querySelectorAll(".reveal").forEach((el) => io.observe(el));
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  const PLAN_TAGLINES = { "7d": "пробный", "1m": "стандарт", "3m": "выгодно", "6m": "выгоднее", "1y": "максимум" };
+
+  fetch("/api/plans").then((r) => r.json()).then((data) => {
+    const row = document.getElementById("plan-row");
+    row.innerHTML = data.plans.map((p) => `
+      <div class="plan">
+        <div class="d">${esc(p.label)}</div>
+        <div class="l">${data.payments_enabled && p.price > 0 ? esc(p.price) + " ₽" : esc(PLAN_TAGLINES[p.code] || "")}</div>
+      </div>
+    `).join("");
+  }).catch(() => {});
 </script>
 </body>
 </html>

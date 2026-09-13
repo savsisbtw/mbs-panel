@@ -1,10 +1,10 @@
 import html
 import os
 
-from config import BASE_DIR, BOT_USERNAME
+import config
 
-ENV_PATH = os.path.join(BASE_DIR, ".env")
-SITE_DIR = os.path.join(BASE_DIR, "site")
+ENV_PATH = os.path.join(config.BASE_DIR, ".env")
+SITE_DIR = os.path.join(config.BASE_DIR, "site")
 
 FIELD_KEYS = ["LEGAL_NAME", "LEGAL_INN", "REFUND_HOURS", "SUPPORT_CONTACT", "SUPPORT_EMAIL", "OFFER_EFFECTIVE_DATE"]
 
@@ -60,20 +60,48 @@ def _field(value: str, fallback_label: str) -> str:
     return html.escape(value) if value else _fallback(fallback_label)
 
 
+def live_bot_username() -> str:
+    raw = read_env_var("BOT_USERNAME", "")
+    return raw.strip() if raw.strip() else config.BOT_USERNAME
+
+
+def live_brand_name() -> str:
+    raw = read_env_var("BRAND_NAME", "")
+    return raw.strip() if raw.strip() else config.BRAND_NAME
+
+
 def render(template_name: str) -> str:
     path = os.path.join(SITE_DIR, template_name)
     with open(path, encoding="utf-8") as f:
         content = f.read()
 
     s = get_settings()
+    bot_username = live_bot_username()
     replacements = {
         "EFFECTIVE_DATE": _field(s["OFFER_EFFECTIVE_DATE"], "дата не указана"),
         "LEGAL_NAME": _field(s["LEGAL_NAME"], "название/ФИО не указано"),
         "INN": _field(s["LEGAL_INN"], "ИНН не указан"),
-        "BOT_USERNAME": _field(f"@{BOT_USERNAME}" if BOT_USERNAME else "", "бот не указан"),
+        "BOT_USERNAME": _field(f"@{bot_username}" if bot_username else "", "бот не указан"),
         "REFUND_HOURS": html.escape(s["REFUND_HOURS"]) if s["REFUND_HOURS"] else "24",
         "SUPPORT_CONTACT": _field(s["SUPPORT_CONTACT"], "контакт не указан"),
         "SUPPORT_EMAIL": _field(s["SUPPORT_EMAIL"], "email не указан"),
+        "BRAND_NAME": html.escape(live_brand_name()),
+    }
+    for token, value in replacements.items():
+        content = content.replace("{{" + token + "}}", value)
+    return content
+
+
+def render_site_page(template_name: str) -> str:
+    path = os.path.join(SITE_DIR, template_name)
+    with open(path, encoding="utf-8") as f:
+        content = f.read()
+
+    replacements = {
+        "BRAND_NAME": html.escape(live_brand_name()),
+        "SITE_DOMAIN": html.escape(config.SITE_DOMAIN),
+        "SUB_DOMAIN": html.escape(config.SUB_DOMAIN),
+        "BOT_USERNAME": html.escape(live_bot_username()),
     }
     for token, value in replacements.items():
         content = content.replace("{{" + token + "}}", value)

@@ -109,6 +109,36 @@ jobs:
           assert db.get_device(1, "hwid-aaaaaaaaaa") is not None
 
           print("app wiring + payments + HWID logic OK")
+
+          import legal
+          import settings
+
+          assert settings.get_brand_name() == "MBS Panel"
+          legal.update_env_var("BRAND_NAME", "CI Test Brand")
+          assert settings.get_brand_name() == "CI Test Brand"
+
+          index_html = legal.render_site_page("index.html")
+          assert "CI Test Brand" in index_html
+          assert "MBS Panel" not in index_html
+          assert "example.com" not in index_html
+          assert "YourBot_robot" not in index_html
+          assert "{{" not in index_html and "}}" not in index_html
+
+          cabinet_html = legal.render_site_page("cabinet.html")
+          assert "CI Test Brand" in cabinet_html
+          assert "{{" not in cabinet_html and "}}" not in cabinet_html
+
+          fake_request = type("FakeRequest", (), {"headers": {}})()
+          root_resp = api.root(fake_request)
+          assert "CI Test Brand" in root_resp
+
+          plans_resp = api.public_plans()
+          assert plans_resp["plans"][0]["code"] == "7d"
+
+          branding_resp = api.public_branding()
+          assert branding_resp["brand_name"] == "CI Test Brand"
+
+          print("branding: site templates + public routes render live, no restart OK")
           PYEOF
 
       - name: Smoke test TOTP, backup/restore, node reorder, multi-admin, rate-limit

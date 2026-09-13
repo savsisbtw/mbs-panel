@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Личный кабинет — MBS Panel</title>
+<title>Личный кабинет — {{BRAND_NAME}}</title>
 <style>
   :root {
     --bg: #0a0b0f; --card: #131519; --border: #1e2128;
@@ -81,11 +81,11 @@
     </div>
     <div id="err"></div>
     <div id="content"></div>
-    <p class="hint">Токен выдаёт бот <a class="tglink" href="https://t.me/YourBot_robot" target="_blank">@YourBot_robot</a> — «Моя подписка»</p>
+    <p class="hint">Токен выдаёт бот <a class="tglink" href="https://t.me/{{BOT_USERNAME}}" target="_blank">@{{BOT_USERNAME}}</a> — «Моя подписка»</p>
   </div>
 
 <script>
-const API = "https://sub.example.com";
+const API = "https://{{SUB_DOMAIN}}";
 
 function esc(s) {
   if (s === null || s === undefined) return "";

@@ -38,6 +38,7 @@ if ADMIN_PANEL_PASSWORD in ("change-me", "changeme", "admin", "password") or len
 PANEL_DOMAIN = env("PANEL_DOMAIN", required=True)
 SUB_DOMAIN = env("SUB_DOMAIN", required=True)
 SITE_DOMAIN = env("SITE_DOMAIN", required=True)
+BRAND_NAME = env("BRAND_NAME", "MBS Panel")
 
 DB_PATH = os.path.join(BASE_DIR, "mbs.db")
 XRAY_CONFIG_PATH = "/usr/local/etc/xray/config.json"

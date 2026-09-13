@@ -21,7 +21,7 @@ import settings
 import totp
 import webhooks
 import xray_manager
-from config import SITE_DOMAIN, SUB_DOMAIN, PANEL_DOMAIN, BOT_USERNAME, BOT_TOKEN, BASE_DIR
+from config import SITE_DOMAIN, SUB_DOMAIN, PANEL_DOMAIN, BASE_DIR
 
 HWID_RE = re.compile(r"^[a-zA-Z0-9=-]{10,64}$")
 ENV_PATH = os.path.join(BASE_DIR, ".env")
@@ -74,7 +74,7 @@ SUB_PAGE_TEMPLATE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MBS Panel — подписка</title>
+<title>{brand_name} — подписка</title>
 <style>
   :root {{
     --bg: #0a0b0f; --card: #131519; --border: #1e2128;
@@ -135,14 +135,14 @@ SUB_PAGE_TEMPLATE = """<!doctype html>
 </head>
 <body>
   <div class="card">
-    <div class="badge">MBS Panel</div>
+    <div class="badge">{brand_name}</div>
     <h1>Подписка готова</h1>
     <p class="sub">Нажми кнопку — сервер добавится в Happ автоматически, или отсканируй QR другим устройством</p>
     <a class="btn" href="happ://add/{sub_url}">Добавить в Happ</a>
     <a class="btn secondary" href="{sub_url}">Открыть ссылку подписки</a>
     <div class="qr-box" id="qr"></div>
     <div class="link-box">{sub_url}</div>
-    <div class="thanks">Спасибо, что пользуетесь MBS Panel.<br>Нет Happ? Скачай: <a href="https://apps.apple.com/us/app/happ-proxy-utility/id6504287215" target="_blank">App Store</a> · <a href="https://play.google.com/store/apps/details?id=com.happproxy" target="_blank">Google Play</a></div>
+    <div class="thanks">Спасибо, что пользуетесь {brand_name}.<br>Нет Happ? Скачай: <a href="https://apps.apple.com/us/app/happ-proxy-utility/id6504287215" target="_blank">App Store</a> · <a href="https://play.google.com/store/apps/details?id=com.happproxy" target="_blank">Google Play</a></div>
   </div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <script>
@@ -160,7 +160,7 @@ SUB_PAGE_EXPIRED_TEMPLATE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MBS Panel — подписка</title>
+<title>{brand_name} — подписка</title>
 <style>
   :root {{
     --bg: #0a0b0f; --card: #131519; --border: #1e2128;
@@ -200,7 +200,7 @@ SUB_PAGE_EXPIRED_TEMPLATE = """<!doctype html>
 </head>
 <body>
   <div class="card">
-    <div class="badge">MBS Panel</div>
+    <div class="badge">{brand_name}</div>
     <h1>Подписка истекла</h1>
     <p class="sub">Доступ по этой ссылке закончился. Продли подписку в боте — ссылка останется той же, ничего заново настраивать не нужно.</p>
     <a class="btn" href="https://t.me/{bot_username}" target="_blank">Продлить в боте</a>
@@ -222,10 +222,12 @@ def get_subscription(token: str, request: Request):
     subs = db.list_active_subscriptions(tg_id=user["tg_id"])
     ua = request.headers.get("user-agent", "")
     if not _is_app_client(ua):
+        brand_name = settings.get_brand_name()
         if not subs:
-            return HTMLResponse(SUB_PAGE_EXPIRED_TEMPLATE.format(bot_username=BOT_USERNAME))
+            _, bot_username = settings.bot_credentials()
+            return HTMLResponse(SUB_PAGE_EXPIRED_TEMPLATE.format(bot_username=bot_username, brand_name=brand_name))
         sub_url = f"https://{SUB_DOMAIN}/sub/{token}"
-        return HTMLResponse(SUB_PAGE_TEMPLATE.format(sub_url=sub_url))
+        return HTMLResponse(SUB_PAGE_TEMPLATE.format(sub_url=sub_url, brand_name=brand_name))
 
     hwid_cfg = settings.get_hwid_settings()
     if hwid_cfg["enabled"]:
@@ -286,7 +288,8 @@ def install_script(token: str):
 
 
 def _tg_send_message(tg_id: int, text: str):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    bot_token, _ = settings.bot_credentials()
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     data = json.dumps({"chat_id": tg_id, "text": text, "parse_mode": "HTML"}).encode()
     req = urllib.request.Request(url, data=data, method="POST", headers={"Content-Type": "application/json"})
     try:
@@ -706,7 +709,7 @@ def admin_2fa_status(request: Request):
 def admin_2fa_setup(request: Request):
     current = _require_current_admin(request)
     secret = totp.generate_secret()
-    return {"secret": secret, "uri": totp.uri(secret, current["username"])}
+    return {"secret": secret, "uri": totp.uri(secret, current["username"], issuer=settings.get_brand_name())}
 
 
 @app.post("/admin/api/2fa/enable")
@@ -734,8 +737,9 @@ def admin_2fa_disable(request: Request, body: dict = Body(...)):
 @app.get("/admin/api/settings/bot")
 def admin_get_bot_settings(request: Request):
     require_admin(request)
-    masked = f"{BOT_TOKEN[:8]}...{BOT_TOKEN[-4:]}" if len(BOT_TOKEN) > 14 else "***"
-    return {"username": BOT_USERNAME, "token_masked": masked}
+    bot_token, bot_username = settings.bot_credentials()
+    masked = f"{bot_token[:8]}...{bot_token[-4:]}" if len(bot_token) > 14 else "***"
+    return {"username": bot_username, "token_masked": masked}
 
 
 @app.post("/admin/api/settings/bot")
@@ -980,6 +984,7 @@ def admin_gift_codes(request: Request):
     codes = db.list_gift_codes()
     nodes_by_code = {n["code"]: n for n in db.list_nodes()}
     plans_by_code = settings.get_plans_by_code()
+    _, bot_username = settings.bot_credentials()
     out = []
     for c in codes:
         node = nodes_by_code.get(c["node"])
@@ -988,7 +993,7 @@ def admin_gift_codes(request: Request):
             **c,
             "node_label": node["label"] if node else c["node"],
             "plan_label": plan["label"] if plan else c["plan"],
-            "link": f"https://t.me/{BOT_USERNAME}?start=gift_{c['code']}",
+            "link": f"https://t.me/{bot_username}?start=gift_{c['code']}",
         })
     return out
 
@@ -1000,7 +1005,8 @@ def admin_create_gift_code(request: Request, body: dict = Body(...)):
     if node not in {n["code"] for n in db.list_nodes()} or plan not in settings.get_plans_by_code():
         raise HTTPException(400, "invalid node/plan")
     code = db.create_gift_code(node, plan, created_by=0)
-    return {"code": code, "link": f"https://t.me/{BOT_USERNAME}?start=gift_{code}"}
+    _, bot_username = settings.bot_credentials()
+    return {"code": code, "link": f"https://t.me/{bot_username}?start=gift_{code}"}
 
 
 @app.get("/admin/api/plans")
@@ -1148,16 +1154,21 @@ ADMIN_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "admi
 _NO_CACHE = {"Cache-Control": "no-cache, must-revalidate"}
 
 
-@app.get("/")
+@app.get("/", response_class=HTMLResponse)
 def root(request: Request):
     if request.headers.get("host", "").split(":")[0] == PANEL_DOMAIN:
         return FileResponse(ADMIN_HTML_PATH, headers=_NO_CACHE)
-    raise HTTPException(404)
+    return legal.render_site_page("index.html")
 
 
 @app.get("/admin")
 def admin_page():
     return FileResponse(ADMIN_HTML_PATH, headers=_NO_CACHE)
+
+
+@app.get("/cabinet.html", response_class=HTMLResponse)
+def cabinet_page():
+    return legal.render_site_page("cabinet.html")
 
 
 @app.get("/offer", response_class=HTMLResponse)
@@ -1168,3 +1179,28 @@ def offer_page():
 @app.get("/privacy", response_class=HTMLResponse)
 def privacy_page():
     return legal.render("privacy.html")
+
+
+@app.get("/api/plans")
+def public_plans():
+    return {
+        "payments_enabled": settings.get_payment_settings()["payments_enabled"],
+        "plans": settings.get_plans(),
+    }
+
+
+@app.get("/api/branding")
+def public_branding():
+    return {"brand_name": settings.get_brand_name()}
+
+
+@app.post("/admin/api/branding")
+def admin_set_branding(request: Request, body: dict = Body(...)):
+    require_admin(request)
+    brand_name = (body.get("brand_name") or "").strip()
+    if not brand_name:
+        raise HTTPException(400, "название не может быть пустым")
+    if len(brand_name) > 60:
+        raise HTTPException(400, "слишком длинное название")
+    _update_env_var("BRAND_NAME", brand_name)
+    return {"brand_name": settings.get_brand_name()}

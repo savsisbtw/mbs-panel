@@ -278,7 +278,7 @@
   <div class="login-card">
     <div class="splash">
       <div class="splash-mark"><svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="16" x2="6" y2="8"/><line x1="12" y1="19" x2="12" y2="5"/><line x1="18" y1="14" x2="18" y2="10"/></svg></div>
-      <div class="splash-title">MBS Panel</div>
+      <div class="splash-title" id="splash-brand-name">MBS Panel</div>
       <div class="splash-tagline">made by savsis</div>
     </div>
     <div id="login-step-password">
@@ -300,7 +300,7 @@
 
 <div id="app">
   <div class="sidebar">
-    <div class="brand"><div class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="16" x2="6" y2="8"/><line x1="12" y1="19" x2="12" y2="5"/><line x1="18" y1="14" x2="18" y2="10"/></svg></div>MBS Panel</div>
+    <div class="brand"><div class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="16" x2="6" y2="8"/><line x1="12" y1="19" x2="12" y2="5"/><line x1="18" y1="14" x2="18" y2="10"/></svg></div><span id="sidebar-brand-name">MBS Panel</span></div>
     <div class="nav-item active" data-view="dashboard" onclick="showView('dashboard')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>Дашборд</div>
     <div class="nav-item" data-view="subscriptions" onclick="showView('subscriptions')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="7" y1="9" x2="17" y2="9"/><line x1="7" y1="13" x2="17" y2="13"/><line x1="7" y1="17" x2="13" y2="17"/></svg>Подписки</div>
     <div class="nav-item" data-view="gifts" onclick="showView('gifts')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="13" rx="1.5"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="12" y1="8" x2="12" y2="21"/><path d="M12 8c-1.2 0-2.3-1.3-2.3-2.6C9.7 4 10.6 3 11.6 3c1.4 0 2.4 2 .4 5"/><path d="M12 8c1.2 0 2.3-1.3 2.3-2.6C14.3 4 13.4 3 12.4 3c-1.4 0-2.4 2-.4 5"/></svg>Гифт-коды</div>
@@ -583,6 +583,12 @@
       </div>
 
       <div class="doc-block">
+        <h2>Название и клиентский сайт</h2>
+        <p>Настройки → «Название» — своё название бренда вместо дефолтного «MBS Panel», показывается сразу везде: заголовок и сайдбар панели, сообщения бота, страница подписки, оферта/политика, otpauth-issuer в приложении-аутентификаторе при включении 2FA. Применяется мгновенно, без рестарта.</p>
+        <p>На домене подписок (<code>SUB_DOMAIN</code>) панель теперь сама отдаёт готовый клиентский сайт — корень (<code>/</code>) рендерит <code>site/index.html</code> (лендинг с живыми тарифами из <code>/api/plans</code>), <code>/cabinet.html</code> — личный кабинет по токену из бота. Оба шаблона лежат в репо (<code>site/</code>) — правишь HTML/CSS напрямую, если нужен свой дизайн, панель только подставляет название/домены/юзернейм бота при каждом запросе.</p>
+      </div>
+
+      <div class="doc-block">
         <h2>Ноды</h2>
         <p><b>Локальная нода</b> (обычно <code>de1</code>) — Xray на том же сервере, что и панель, управляется напрямую правкой <code>config.json</code>. <b>Управляемые ноды</b> — отдельные серверы, панель ходит на них по SSH management-ключу (генерится сам при первом добавлении ноды, публичная часть раздаётся install-скриптом ноды — панель никогда не просит пароль от нового сервера).</p>
         <p>Добавление ноды: Ноды → Добавить ноду → один <code>bash &lt;(curl ...)&gt;</code> на чистый сервер. Редактирование существующей: кнопка «Редактировать» у ноды — для de1 доступно только название (реальные параметры подключения там берутся из <code>.env</code>, не из базы).</p>
@@ -626,13 +632,24 @@
       <div class="page-title">Настройки</div>
       <div class="page-sub">Смена телеграм-бота без переустановки панели</div>
       <div class="section">
+        <div class="section-head"><h2>Название</h2></div>
+        <p class="page-sub" style="margin-bottom:16px">Показывается везде, где сейчас видят клиенты и ты сам: сайт, бот, страница подписки, оферта/политика, вход в панель.</p>
+        <div class="form-row">
+          <div><label class="f">Название бренда</label><input type="text" id="brand-name-input" placeholder="MBS Panel"></div>
+          <div style="flex:0"><label class="f">&nbsp;</label><button class="btn" onclick="saveBrandName()">Сохранить</button></div>
+        </div>
+        <p class="check-hint">Применяется сразу везде, без рестарта.</p>
+        <div id="brand-name-result"></div>
+      </div>
+
+      <div class="section" style="margin-top:20px">
         <div class="section-head"><h2>Telegram-бот</h2></div>
         <p class="page-sub" style="margin-bottom:16px">Сейчас: <b id="settings-bot-username">—</b> (токен: <span id="settings-bot-token" style="font-family:'Fira Mono',monospace">—</span>)</p>
         <div class="form-row">
           <div><label class="f">Новый токен (от @BotFather)</label><input type="text" id="settings-bot-token-input" placeholder="123456789:AAAA..."></div>
           <div style="flex:0"><label class="f">&nbsp;</label><button class="btn" onclick="saveBotSettings()">Сменить бота</button></div>
         </div>
-        <p class="check-hint">Панель сама проверит токен у Telegram (запрос getMe) перед применением и подставит настоящий юзернейм бота — придумывать не нужно. После смены перезапустится только бот; если уведомления от api (например об оплате) продолжат идти со старого бота, выполни на сервере <code>mbs restart</code>.</p>
+        <p class="check-hint">Панель сама проверит токен у Telegram (запрос getMe) перед применением и подставит настоящий юзернейм бота — придумывать не нужно. Применяется сразу — бот перезапускается сам, а панель (уведомления об оплате, ссылки на бота) подхватывает новый токен и юзернейм без рестарта.</p>
         <div id="settings-bot-result"></div>
       </div>
 
@@ -797,7 +814,7 @@ function showView(name) {
   if (name === "nodes") loadNodes();
   if (name === "traffic") loadTraffic();
   if (name === "payments") { loadPayments(); loadPaymentsSettings(); }
-  if (name === "settings") { loadBotSettings(); loadAdmins(); loadTotpStatus(); loadWebhookSettings(); loadHwidSettings(); }
+  if (name === "settings") { loadBrandName(); loadBotSettings(); loadAdmins(); loadTotpStatus(); loadWebhookSettings(); loadHwidSettings(); }
 }
 
 const COUNTRIES = [
@@ -1185,6 +1202,25 @@ async function saveHwidSettings() {
     await api("/admin/api/hwid-settings", { method: "POST", body: JSON.stringify(body) });
     result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--green)">Сохранено — применилось сразу, без рестарта</p>';
     loadHwidSettings();
+  } catch (e) {
+    result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--red)">Не получилось: ' + esc(e.message) + '</p>';
+  }
+}
+
+async function loadBrandName() {
+  const res = await fetch("/api/branding").then((r) => r.json());
+  document.getElementById("brand-name-input").value = res.brand_name || "";
+  document.getElementById("brand-name-result").innerHTML = "";
+}
+
+async function saveBrandName() {
+  const brand_name = document.getElementById("brand-name-input").value.trim();
+  const result = document.getElementById("brand-name-result");
+  if (!brand_name) return;
+  try {
+    const res = await api("/admin/api/branding", { method: "POST", body: JSON.stringify({ brand_name }) });
+    applyBrandName(res.brand_name);
+    result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--green)">Сохранено — применилось сразу</p>';
   } catch (e) {
     result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--red)">Не получилось: ' + esc(e.message) + '</p>';
   }
@@ -1669,8 +1705,18 @@ async function createManualNode() {
   loadNodes();
 }
 
+function applyBrandName(name) {
+  if (!name) return;
+  document.title = name;
+  const splash = document.getElementById("splash-brand-name");
+  if (splash) splash.textContent = name;
+  const sidebar = document.getElementById("sidebar-brand-name");
+  if (sidebar) sidebar.textContent = name;
+}
+
 (async function init() {
   initDropdowns();
+  fetch("/api/branding").then((r) => r.json()).then((d) => applyBrandName(d.brand_name)).catch(() => {});
   try {
     const me = await api("/admin/api/me");
     if (me.authenticated) showApp(); else showLogin();

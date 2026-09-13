@@ -67,6 +67,19 @@ def platega_credentials():
     )
 
 
+def get_brand_name() -> str:
+    raw = legal.read_env_var("BRAND_NAME", "")
+    return raw.strip() if raw.strip() else config.BRAND_NAME
+
+
+def bot_credentials():
+    raw = legal.read_env_vars(["BOT_TOKEN", "BOT_USERNAME"])
+    return (
+        raw.get("BOT_TOKEN") or config.BOT_TOKEN,
+        raw.get("BOT_USERNAME") or config.BOT_USERNAME,
+    )
+
+
 def get_hwid_settings() -> dict:
     raw = legal.read_env_vars(["HWID_LIMIT_ENABLED", "HWID_FALLBACK_LIMIT"])
     limit = _positive_int(raw.get("HWID_FALLBACK_LIMIT"), config.HWID_FALLBACK_LIMIT)

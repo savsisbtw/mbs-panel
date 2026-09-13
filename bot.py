@@ -72,13 +72,14 @@ def connect_kb(token: str, extra_rows: list[list[InlineKeyboardButton]] | None =
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-ABOUT_TEXT = (
-    "<b>MBS Panel</b>\n\n"
-    "Быстрый и незаметный доступ без границ. Протокол VLESS+Reality "
-    "маскируется под обычный HTTPS-трафик, ничем не палится.\n\n"
-    f"{DIVIDER}\n"
-    f"Сайт: {SITE_DOMAIN}"
-)
+def about_text() -> str:
+    return (
+        f"<b>{settings.get_brand_name()}</b>\n\n"
+        "Быстрый и незаметный доступ без границ. Протокол VLESS+Reality "
+        "маскируется под обычный HTTPS-трафик, ничем не палится.\n\n"
+        f"{DIVIDER}\n"
+        f"Сайт: {SITE_DOMAIN}"
+    )
 
 
 async def send_main_menu(message: Message):
@@ -121,7 +122,7 @@ async def start_deeplink(message: Message, command: CommandObject):
 async def start_plain(message: Message):
     db.get_or_create_user(message.from_user.id, message.from_user.username)
     await message.answer(
-        "Привет! Это бот MBS Panel.\nВыбери действие ниже.",
+        f"Привет! Это бот {settings.get_brand_name()}.\nВыбери действие ниже.",
     )
     await send_main_menu(message)
 
@@ -135,7 +136,7 @@ async def cb_menu_main(cb: CallbackQuery):
 @dp.callback_query(F.data == "menu:about")
 async def cb_about(cb: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Назад", callback_data="menu:main")]])
-    await cb.message.edit_text(ABOUT_TEXT, reply_markup=kb)
+    await cb.message.edit_text(about_text(), reply_markup=kb)
     await cb.answer()
 
 
@@ -201,7 +202,7 @@ async def cb_pay(cb: CallbackQuery):
     db.create_payment(payment_id, cb.from_user.id, node_code, plan_code, provider, plan["price"])
     try:
         external_id, pay_url = payments.create_payment_link(
-            provider, payment_id, plan["price"], f"MBS Panel — {node_row['label']}, {plan['label']}",
+            provider, payment_id, plan["price"], f"{settings.get_brand_name()} — {node_row['label']}, {plan['label']}",
         )
     except Exception:
         log.exception("payment creation failed")

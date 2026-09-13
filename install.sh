@@ -47,6 +47,7 @@ case "$ID" in
   *) echo "тестировалось на Ubuntu 22/24 и Debian 11/12, но пробуем всё равно на $PRETTY_NAME" ;;
 esac
 
+BRAND_NAME=$(ask "Название твоего сервиса (видят клиенты — сайт/бот/подписка)" "MBS Panel")
 PANEL_DOMAIN=$(ask "Домен панели (админка)" "")
 SUB_DOMAIN=$(ask "Домен подписок" "")
 SITE_DOMAIN=$(ask "Домен сайта (для CORS и ссылок в боте)" "$PANEL_DOMAIN")
@@ -105,6 +106,7 @@ XRAY_SHORT_ID_GRPC=$(openssl rand -hex 8)
 XRAY_SHORT_ID_XHTTP=$(openssl rand -hex 8)
 
 cat > "$APP_DIR/.env" << ENVEOF
+BRAND_NAME=$BRAND_NAME
 BOT_TOKEN=$BOT_TOKEN
 BOT_USERNAME=$BOT_USERNAME
 ADMIN_IDS=$ADMIN_IDS
@@ -418,6 +420,7 @@ echo "== готово =="
 echo "Панель:    https://$PANEL_DOMAIN"
 echo "Пароль:    $ADMIN_PANEL_PASSWORD  (сменить: mbs pass)"
 echo "Подписки:  https://$SUB_DOMAIN"
+echo "Сайт:      https://$SUB_DOMAIN  (готовый лендинг, название/тарифы уже подставлены — правь site/index.html под себя, если нужно)"
 echo "Нода:      $DE1_ADDRESS"
 echo
 echo "статус сервисов:"
