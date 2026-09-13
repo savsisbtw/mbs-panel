@@ -616,7 +616,7 @@
         <h2>Платежи и вебхуки</h2>
         <p>Вкладка Платежи → «Настройка приёма платежей» собирает публичную оферту и политику конфиденциальности (<code>/offer</code>, <code>/privacy</code>) из введённых реквизитов — ЮKassa их спросит при регистрации магазина. Дата вступления в силу проставляется один раз, правки реквизитов её не двигают.</p>
         <p>Ключи ЮKassa проверяются вживую через их <code>/v3/me</code> перед сохранением; у Platega такого эндпоинта нет, ключи сохраняются без проверки. Оба провайдера включаются независимо.</p>
-        <p>Исходящие вебхуки (Настройки → Webhook на события) — панель стучится на указанный URL при оплате (<code>payment.paid</code>), ручной выдаче подписки админом (<code>subscription.granted_by_admin</code>), отзыве (<code>subscription.revoked</code>), постановке на паузу (<code>subscription.held</code>) и возобновлении (<code>subscription.resumed</code>). Тело подписано <code>X-Signature</code> (HMAC-SHA256). Секрет выдаётся один раз и не меняется при правке URL — для интеграций со своими системами, без опроса API.</p>
+        <p>Исходящие вебхуки (Настройки → Webhook на события) — панель стучится на указанный URL при оплате (<code>payment.paid</code>), ручной выдаче подписки админом (<code>subscription.granted_by_admin</code>), отзыве (<code>subscription.revoked</code>), постановке на паузу (<code>subscription.held</code>) и возобновлении (<code>subscription.resumed</code>), а также при добавлении (<code>node.added</code>), удалении (<code>node.deleted</code>) и включении/выключении ноды (<code>node.enabled</code>/<code>node.disabled</code> — только когда состояние реально поменялось, не на каждое сохранение формы редактирования). Тело подписано <code>X-Signature</code> (HMAC-SHA256). Секрет выдаётся один раз и не меняется при правке URL — для интеграций со своими системами, без опроса API.</p>
         <p>Вкладка Платежи → «Тарифы» — цены по срокам и общий рубильник приёма оплаты. Как и реквизиты с ключами провайдеров, это читается панелью напрямую из <code>.env</code> при каждом запросе — правки в UI применяются мгновенно везде (бот, API, проверка вебхуков), рестарт панели нигде не требуется.</p>
       </div>
 
@@ -723,7 +723,7 @@
           <div style="flex:0"><label class="f">&nbsp;</label><button class="btn" onclick="saveWebhookSettings()">Сохранить</button></div>
         </div>
         <p class="check-hint">
-          События: <code>payment.paid</code>, <code>subscription.granted_by_admin</code>, <code>subscription.revoked</code>, <code>subscription.held</code>, <code>subscription.resumed</code>. Тело — JSON <code>{"event": "...", "data": {...}}</code>, подписано заголовком <code>X-Signature</code> (HMAC-SHA256 от тела запроса на секрете ниже) — так получатель проверяет, что запрос реально от панели.
+          События: <code>payment.paid</code>, <code>subscription.granted_by_admin</code>, <code>subscription.revoked</code>, <code>subscription.held</code>, <code>subscription.resumed</code>, <code>node.added</code>, <code>node.deleted</code>, <code>node.enabled</code>, <code>node.disabled</code>. Тело — JSON <code>{"event": "...", "data": {...}}</code>, подписано заголовком <code>X-Signature</code> (HMAC-SHA256 от тела запроса на секрете ниже) — так получатель проверяет, что запрос реально от панели.
           Секрет для проверки: <code id="webhook-secret-display">—</code>
         </p>
         <div id="webhook-result"></div>

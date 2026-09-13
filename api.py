@@ -1086,6 +1086,7 @@ def admin_create_node(request: Request, body: dict = Body(...)):
         sni=body["sni"], flow=body.get("flow", "xtls-rprx-vision"),
         shared_uuid=body.get("shared_uuid"),
     )
+    webhooks.send("node.added", {"code": node["code"], "label": node["label"], "kind": node["kind"]})
     return node
 
 
@@ -1096,16 +1097,25 @@ def admin_update_node(code: str, request: Request, body: dict = Body(...)):
     if code == "de1":
         editable = {"label"}
     allowed = {k: v for k, v in body.items() if k in editable}
-    return db.update_node(code, **allowed)
+    before = db.get_node(code)
+    updated = db.update_node(code, **allowed)
+    if before and updated and "enabled" in allowed and bool(before["enabled"]) != bool(updated["enabled"]):
+        webhooks.send("node.enabled" if updated["enabled"] else "node.disabled", {
+            "code": code, "label": updated["label"],
+        })
+    return updated
 
 
 @app.delete("/admin/api/nodes/{code}")
 def admin_delete_node(code: str, request: Request):
     require_admin(request)
+    node = db.get_node(code)
     try:
         db.delete_node(code)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    if node:
+        webhooks.send("node.deleted", {"code": code, "label": node["label"]})
     return {"ok": True}
 
 
