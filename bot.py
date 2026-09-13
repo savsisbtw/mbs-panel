@@ -227,9 +227,10 @@ async def cb_mysub(cb: CallbackQuery):
         await cb.message.edit_text("У тебя пока нет активных подписок.", reply_markup=kb)
         return await cb.answer()
     lines = ["<b>Твои подписки</b>\n"]
+    nodes_by_code = {n["code"]: n for n in db.list_nodes()}
     for s in subs:
         plan = PLANS_BY_CODE.get(s["plan"], {}).get("label", s["plan"])
-        node_info = db.get_node(s["node"])
+        node_info = nodes_by_code.get(s["node"])
         node = node_info["label"] if node_info else s["node"]
         lines.append(f"{node} — {plan}, до {s['expires_at'][:10]}")
     lines.append(f"\n{DIVIDER}\nСсылка-подписка:\n<code>{sub_url_for(user['token'])}</code>")
@@ -326,6 +327,7 @@ async def cb_admin_sync(cb: CallbackQuery):
 async def reconcile_pending_payments():
     if not PAYMENTS_ENABLED:
         return
+    nodes_by_code = {n["code"]: n for n in db.list_nodes()}
     for payment in db.list_payments():
         if payment["status"] != "pending" or not payment.get("external_id"):
             continue
@@ -335,7 +337,7 @@ async def reconcile_pending_payments():
             continue
         if status in payments.PAID_STATUSES:
             plan = PLANS_BY_CODE.get(payment["plan"])
-            node_row = db.get_node(payment["node"])
+            node_row = nodes_by_code.get(payment["node"])
             if not plan or not node_row:
                 continue
             granted = db.mark_payment_paid(payment["id"])
