@@ -288,3 +288,67 @@ jobs:
 
           print("live settings: prices/HWID/credential-rotation all apply with zero reimport OK")
           PYEOF
+
+      - name: Smoke test backup/restore round-trip covers branding + live settings + held subscriptions
+        env:
+          BOT_TOKEN: "123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          BOT_USERNAME: "x"
+          ADMIN_IDS: "1"
+          ADMIN_PANEL_PASSWORD: "ci-test-password-not-real"
+          PANEL_DOMAIN: "panel.test"
+          SUB_DOMAIN: "sub.test"
+          SITE_DOMAIN: "test"
+          XRAY_PUBLIC_KEY: "x"
+          XRAY_SHORT_ID_TCP: "x"
+          XRAY_SHORT_ID_GRPC: "x"
+          XRAY_SHORT_ID_XHTTP: "x"
+        run: |
+          python - << 'PYEOF'
+          import backup
+          import db
+          import legal
+          import settings
+
+          db.init_db()
+          db.create_node("n1", "Node One", "managed", "1.1.1.1", 443, "pub1", "sid1", "sni1", "xtls-rprx-vision")
+
+          sub_a = db.create_subscription(111, "n1", 30, "1m", source="bot")
+          sub_b = db.create_subscription(222, "n1", 30, "1m", source="bot")
+
+          legal.update_env_var("BRAND_NAME", "SnapshotBrand")
+          settings.set_plan_prices({"1m": 555})
+          legal.update_env_var("HWID_LIMIT_ENABLED", "true")
+          legal.update_env_var("HWID_FALLBACK_LIMIT", "4")
+          assert db.hold_subscription(sub_a["uuid"])
+
+          assert settings.get_brand_name() == "SnapshotBrand"
+          assert settings.get_plans_by_code()["1m"]["price"] == 555
+          assert settings.get_hwid_settings() == {"enabled": True, "fallback_limit": 4}
+          assert len(db.list_active_subscriptions(tg_id=111)) == 0, "held sub excluded pre-backup"
+          assert len(db.list_active_subscriptions(tg_id=222)) == 1
+
+          snapshot = backup.create_backup()
+
+          legal.update_env_var("BRAND_NAME", "MutatedAfterBackup")
+          settings.set_plan_prices({"1m": 999})
+          legal.update_env_var("HWID_LIMIT_ENABLED", "false")
+          assert db.resume_subscription(sub_a["uuid"])["held_at"] is None
+          sub_c = db.create_subscription(333, "n1", 30, "1m", source="bot")
+          assert settings.get_brand_name() == "MutatedAfterBackup"
+          assert len(db.list_active_subscriptions(tg_id=111)) == 1
+
+          result = backup.restore_backup(snapshot)
+          assert result["restored_env"] is True
+
+          assert settings.get_brand_name() == "SnapshotBrand", "brand must revert to snapshot value"
+          assert settings.get_plans_by_code()["1m"]["price"] == 555, "price override must revert"
+          assert settings.get_hwid_settings() == {"enabled": True, "fallback_limit": 4}, "hwid settings must revert"
+
+          restored_sub_a = db.get_subscription(sub_a["uuid"])
+          assert restored_sub_a["held_at"] is not None, "held_at must round-trip through backup/restore"
+          assert len(db.list_active_subscriptions(tg_id=111)) == 0, "sub_a held again after restore"
+          assert len(db.list_active_subscriptions(tg_id=222)) == 1, "sub_b untouched"
+          assert db.get_subscription(sub_c["uuid"]) is None, "sub_c created after backup point must be gone"
+
+          print("backup/restore correctly round-trips branding, live settings and held_at together OK")
+          PYEOF
