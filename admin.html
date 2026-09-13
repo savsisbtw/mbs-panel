@@ -541,6 +541,16 @@
         </div>
         <p class="check-hint">Панель сама постучится в ЮKassa (<code>/v3/me</code>) и сохранит ключи только если они рабочие. После сохранения включаются приём оплаты и вебхуки; бот перезапустится сам, для самой панели (обработка вебхуков) один раз выполни на сервере <code>mbs restart</code>.</p>
         <div id="yookassa-result"></div>
+
+        <h3 style="font-size:14px;margin:24px 0 12px">Platega — ключи API</h3>
+        <div id="platega-status" class="page-sub" style="margin-bottom:12px"></div>
+        <div class="form-row">
+          <div><label class="f">Merchant ID</label><input type="text" id="pg-merchant-id" placeholder="merchant_..."></div>
+          <div><label class="f">Секрет</label><input type="password" id="pg-secret" placeholder="secret_..."></div>
+          <div style="flex:0"><label class="f">&nbsp;</label><button class="btn" onclick="savePlategaSettings()">Сохранить</button></div>
+        </div>
+        <p class="check-hint">У Platega нет публичного эндпоинта для проверки ключей без реального платежа, так что сохраняется без предварительной проверки — если ключи неверные, это будет видно по первой неудачной оплате. Тот же рестарт нужен, что и для ЮKassa.</p>
+        <div id="platega-result"></div>
       </div>
 
       <div class="section" style="margin-top:20px">
@@ -1000,9 +1010,10 @@ async function checkPayment(id, btn) {
 }
 
 async function loadPaymentsSettings() {
-  const [legalRes, ykRes] = await Promise.all([
+  const [legalRes, ykRes, pgRes] = await Promise.all([
     api("/admin/api/payments/legal-settings"),
     api("/admin/api/payments/yookassa-settings"),
+    api("/admin/api/payments/platega-settings"),
   ]);
   document.getElementById("legal-name").value = legalRes.LEGAL_NAME || "";
   document.getElementById("legal-inn").value = legalRes.LEGAL_INN || "";
@@ -1011,11 +1022,19 @@ async function loadPaymentsSettings() {
   document.getElementById("legal-email").value = legalRes.SUPPORT_EMAIL || "";
 
   document.getElementById("yk-shop-id").value = ykRes.shop_id || "";
-  const status = document.getElementById("yookassa-status");
+  const ykStatus = document.getElementById("yookassa-status");
   if (ykRes.enabled && ykRes.has_secret) {
-    status.innerHTML = '<span class="badge ok">подключена</span> shop_id: ' + esc(ykRes.shop_id);
+    ykStatus.innerHTML = '<span class="badge ok">подключена</span> shop_id: ' + esc(ykRes.shop_id);
   } else {
-    status.innerHTML = '<span class="badge bad">не настроена</span>';
+    ykStatus.innerHTML = '<span class="badge bad">не настроена</span>';
+  }
+
+  document.getElementById("pg-merchant-id").value = pgRes.merchant_id || "";
+  const pgStatus = document.getElementById("platega-status");
+  if (pgRes.enabled && pgRes.has_secret) {
+    pgStatus.innerHTML = '<span class="badge ok">подключена</span> merchant_id: ' + esc(pgRes.merchant_id);
+  } else {
+    pgStatus.innerHTML = '<span class="badge bad">не настроена</span>';
   }
 }
 
@@ -1046,6 +1065,21 @@ async function saveYookassaSettings() {
     const res = await api("/admin/api/payments/yookassa-settings", { method: "POST", body: JSON.stringify({ shop_id, secret_key }) });
     result.innerHTML = `<p class="page-sub" style="margin-top:10px;color:var(--green)">Ключи рабочие, сохранено.${res.restarted_bot ? " Бот перезапущен." : " Бот сам не перезапустился — выполни mbs restart."} Для приёма вебхуков панелью выполни на сервере <code>mbs restart</code>.</p>`;
     document.getElementById("yk-secret-key").value = "";
+    loadPaymentsSettings();
+  } catch (e) {
+    result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--red)">Не получилось: ' + esc(e.message) + '</p>';
+  }
+}
+
+async function savePlategaSettings() {
+  const merchant_id = document.getElementById("pg-merchant-id").value.trim();
+  const secret = document.getElementById("pg-secret").value.trim();
+  const result = document.getElementById("platega-result");
+  if (!merchant_id || !secret) return;
+  try {
+    const res = await api("/admin/api/payments/platega-settings", { method: "POST", body: JSON.stringify({ merchant_id, secret }) });
+    result.innerHTML = `<p class="page-sub" style="margin-top:10px;color:var(--green)">Сохранено.${res.restarted_bot ? " Бот перезапущен." : " Бот сам не перезапустился — выполни mbs restart."} Для приёма вебхуков панелью выполни на сервере <code>mbs restart</code>.</p>`;
+    document.getElementById("pg-secret").value = "";
     loadPaymentsSettings();
   } catch (e) {
     result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--red)">Не получилось: ' + esc(e.message) + '</p>';

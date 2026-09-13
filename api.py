@@ -426,6 +426,36 @@ def admin_set_yookassa_settings(request: Request, body: dict = Body(...)):
     return {"ok": True, "restarted_bot": restarted}
 
 
+@app.get("/admin/api/payments/platega-settings")
+def admin_get_platega_settings(request: Request):
+    require_admin(request)
+    return {
+        "enabled": payments.PLATEGA_ENABLED,
+        "merchant_id": legal.read_env_var("PLATEGA_MERCHANT_ID", ""),
+        "has_secret": bool(legal.read_env_var("PLATEGA_SECRET", "")),
+    }
+
+
+@app.post("/admin/api/payments/platega-settings")
+def admin_set_platega_settings(request: Request, body: dict = Body(...)):
+    require_admin(request)
+    merchant_id = (body.get("merchant_id") or "").strip()
+    secret = (body.get("secret") or "").strip()
+    if not merchant_id or not secret:
+        raise HTTPException(400, "merchant_id и secret обязательны")
+    _update_env_var("PLATEGA_MERCHANT_ID", merchant_id)
+    _update_env_var("PLATEGA_SECRET", secret)
+    _update_env_var("PLATEGA_ENABLED", "true")
+    _update_env_var("PAYMENTS_ENABLED", "true")
+    restarted = False
+    try:
+        subprocess.run(["systemctl", "restart", "mbs-bot"], check=True, timeout=15)
+        restarted = True
+    except Exception:
+        restarted = False
+    return {"ok": True, "restarted_bot": restarted}
+
+
 @app.post("/payments/webhook/yookassa")
 async def yookassa_webhook(request: Request):
     body = await request.json()
