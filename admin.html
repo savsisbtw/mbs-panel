@@ -332,6 +332,10 @@
     <div id="view-subscriptions" class="view">
       <div class="page-title">Подписки</div>
       <div class="page-sub">Все выданные подписки</div>
+      <div class="form-row" style="margin-bottom:16px">
+        <div><input type="text" id="subs-search" placeholder="Поиск: юзернейм, tg id, сервер, тариф" oninput="renderFilteredSubs()"></div>
+        <div style="flex:0;min-width:180px"><div id="subs-status-filter" class="dd"></div></div>
+      </div>
       <div class="table-wrap"><table><thead><tr>
         <th>Пользователь</th><th>Сервер</th><th>Тариф</th><th>Выдана</th><th>Истекает</th><th>Статус</th><th></th>
       </tr></thead><tbody id="subs-body"></tbody></table></div>
@@ -969,6 +973,16 @@ function initDropdowns() {
   const countryOptions = COUNTRIES.map(([code, name]) => ({
     value: code, label: `${flagEmoji(code)} ${name}`,
   }));
+  DD.subsStatusFilter = createDropdown("subs-status-filter", {
+    options: [
+      { value: "all", label: "Все статусы" },
+      { value: "active", label: "Активные" },
+      { value: "held", label: "На паузе" },
+      { value: "expired", label: "Истекшие/отозванные" },
+    ],
+    value: "all", placeholder: "Статус",
+    onChange: () => renderFilteredSubs(),
+  });
   DD.ngCountry = createDropdown("ng-country", {
     options: countryOptions, placeholder: "Страна", searchable: true,
     onChange: (code) => {
@@ -1413,8 +1427,9 @@ async function loadDashboard() {
   `).join("") : '<tr><td colspan="5"><div class="empty">Пока нет подписок</div></td></tr>';
 }
 
-async function loadSubscriptions() {
-  const subs = await api("/admin/api/subscriptions");
+let allSubs = [];
+
+function renderSubsTable(subs) {
   const body = document.getElementById("subs-body");
   body.innerHTML = subs.length ? subs.map((s, i) => `
     <tr ${rowAttr(i)}><td>${s.username ? "@" + esc(s.username) : "tg" + s.tg_id}</td><td>${esc(s.node_label)}</td><td>${esc(s.plan_label)}</td>
@@ -1427,6 +1442,31 @@ async function loadSubscriptions() {
       ${s.active ? `<button class="muted-btn" onclick="revokeSub('${s.uuid}')">Отозвать</button>` : ""}
     </td></tr>
   `).join("") : '<tr><td colspan="7"><div class="empty">Пока нет подписок</div></td></tr>';
+}
+
+function subStatus(s) {
+  if (s.held_at) return "held";
+  if (!s.active) return "expired";
+  return "active";
+}
+
+function renderFilteredSubs() {
+  const q = document.getElementById("subs-search").value.trim().toLowerCase();
+  const statusFilter = DD.subsStatusFilter ? DD.subsStatusFilter.getValue() : "all";
+  const filtered = allSubs.filter((s) => {
+    if (statusFilter !== "all" && subStatus(s) !== statusFilter) return false;
+    if (!q) return true;
+    const haystack = [
+      s.username || "", String(s.tg_id), s.node_label || "", s.plan_label || "",
+    ].join(" ").toLowerCase();
+    return haystack.includes(q);
+  });
+  renderSubsTable(filtered);
+}
+
+async function loadSubscriptions() {
+  allSubs = await api("/admin/api/subscriptions");
+  renderFilteredSubs();
 }
 
 let devicesTgId = null;
