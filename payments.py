@@ -62,6 +62,11 @@ def create_yookassa_payment(payment_id: str, amount_rub: int, description: str) 
     return external_id, pay_url
 
 
+def validate_yookassa_credentials(shop_id: str, secret_key: str) -> dict:
+    auth = base64.b64encode(f"{shop_id}:{secret_key}".encode()).decode()
+    return _get_json("https://api.yookassa.ru/v3/me", {"Authorization": f"Basic {auth}"})
+
+
 def verify_yookassa_notification(body: dict) -> bool:
     return body.get("event") == "payment.succeeded" and "object" in body
 

@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, FileResponse
 
 import backup
 import db
+import legal
 import links
 import nodeprov
 import payments
@@ -372,6 +373,57 @@ def admin_check_payment(payment_id: str, request: Request):
         return {"status": payment["status"]}
     status = _check_and_reconcile_payment(payment)
     return {"status": status}
+
+
+@app.get("/admin/api/payments/legal-settings")
+def admin_get_legal_settings(request: Request):
+    require_admin(request)
+    return legal.get_settings()
+
+
+@app.post("/admin/api/payments/legal-settings")
+def admin_set_legal_settings(request: Request, body: dict = Body(...)):
+    require_admin(request)
+    for key in ("LEGAL_NAME", "LEGAL_INN", "REFUND_HOURS", "SUPPORT_CONTACT", "SUPPORT_EMAIL"):
+        if key in body:
+            _update_env_var(key, str(body[key]).strip())
+    if not legal.read_env_var("OFFER_EFFECTIVE_DATE"):
+        _update_env_var("OFFER_EFFECTIVE_DATE", datetime.date.today().strftime("%d.%m.%Y"))
+    return {"ok": True, "settings": legal.get_settings()}
+
+
+@app.get("/admin/api/payments/yookassa-settings")
+def admin_get_yookassa_settings(request: Request):
+    require_admin(request)
+    return {
+        "enabled": payments.YOOKASSA_ENABLED,
+        "shop_id": legal.read_env_var("YOOKASSA_SHOP_ID", ""),
+        "has_secret": bool(legal.read_env_var("YOOKASSA_SECRET_KEY", "")),
+    }
+
+
+@app.post("/admin/api/payments/yookassa-settings")
+def admin_set_yookassa_settings(request: Request, body: dict = Body(...)):
+    require_admin(request)
+    shop_id = (body.get("shop_id") or "").strip()
+    secret_key = (body.get("secret_key") or "").strip()
+    if not shop_id or not secret_key:
+        raise HTTPException(400, "shop_id и secret_key обязательны")
+    try:
+        payments.validate_yookassa_credentials(shop_id, secret_key)
+    except Exception:
+        raise HTTPException(401, "ЮKassa не приняла эти ключи — проверь shop_id и секретный ключ")
+    _update_env_var("YOOKASSA_SHOP_ID", shop_id)
+    _update_env_var("YOOKASSA_SECRET_KEY", secret_key)
+    _update_env_var("YOOKASSA_ENABLED", "true")
+    _update_env_var("PAYMENTS_ENABLED", "true")
+    restarted = False
+    try:
+        subprocess.run(["systemctl", "restart", "mbs-bot"], check=True, timeout=15)
+        restarted = True
+    except Exception:
+        restarted = False
+    return {"ok": True, "restarted_bot": restarted}
 
 
 @app.post("/payments/webhook/yookassa")
@@ -994,3 +1046,13 @@ def root(request: Request):
 @app.get("/admin")
 def admin_page():
     return FileResponse(ADMIN_HTML_PATH, headers=_NO_CACHE)
+
+
+@app.get("/offer", response_class=HTMLResponse)
+def offer_page():
+    return legal.render("offer.html")
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+def privacy_page():
+    return legal.render("privacy.html")

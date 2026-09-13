@@ -502,9 +502,53 @@
     <div id="view-payments" class="view">
       <div class="page-title">Платежи</div>
       <div class="page-sub">ЮKassa / Platega — история и статус, с проверкой на стороне провайдера при пропущенном вебхуке</div>
-      <div class="table-wrap"><table><thead><tr>
-        <th>Пользователь</th><th>Сервер</th><th>Тариф</th><th>Провайдер</th><th>Сумма</th><th>Создан</th><th>Статус</th><th></th>
-      </tr></thead><tbody id="payments-body"></tbody></table></div>
+
+      <div class="section">
+        <div class="section-head"><h2>Настройка приёма платежей</h2></div>
+        <p class="page-sub" style="margin-bottom:16px">Заполни один раз — панель сама соберёт из этого публичную оферту и политику конфиденциальности (обязательны для подключения ЮKassa) на своих страницах, готовых к показу клиентам.</p>
+
+        <div class="doc-block" style="margin-bottom:20px">
+          <h2>Как это работает</h2>
+          <p>1. Заполни реквизиты ниже (кто ты для закона — самозанятый/ИП/ООО, ИНН, контакты). Это те же данные, что ЮKassa попросит при регистрации магазина.</p>
+          <p>2. Подключи ЮKassa: заведи магазин на <a href="https://yookassa.ru" target="_blank">yookassa.ru</a>, в личном кабинете возьми <b>shop_id</b> и <b>секретный ключ</b> (Настройки → Ключи API), вставь сюда. Панель сразу проверит их и сохранит.</p>
+          <p>3. Ссылки на готовые оферту и политику (<code>https://{домен}/offer</code>, <code>/privacy</code>) — дай их ЮKassa при регистрации магазина, она их обязательно спросит.</p>
+          <p class="muted">Самозанятым для приёма платежей от физлиц регистрация магазина в ЮKassa доступна напрямую по паспорту и ИНН, без онлайн-кассы — она уже встроена в сервис ЮKassa. ИП/ООО — обычная регистрация магазина.</p>
+        </div>
+
+        <h3 style="font-size:14px;margin:0 0 12px">Реквизиты для документов</h3>
+        <div class="form-row">
+          <div><label class="f">Кто ты</label><div id="legal-type" class="dd"></div></div>
+          <div><label class="f" id="legal-name-label">ФИО</label><input type="text" id="legal-name" placeholder="Иванов Иван Иванович"></div>
+          <div><label class="f">ИНН</label><input type="text" id="legal-inn" placeholder="770123456789"></div>
+        </div>
+        <div class="form-row" style="margin-top:12px">
+          <div><label class="f">Email поддержки</label><input type="text" id="legal-email" placeholder="support@example.com"></div>
+          <div><label class="f">Telegram-контакт поддержки</label><input type="text" id="legal-contact" placeholder="@support"></div>
+          <div><label class="f">Возврат в течение (часов)</label><input type="text" id="legal-refund" placeholder="24"></div>
+        </div>
+        <div class="form-row" style="margin-top:12px">
+          <button class="btn" onclick="saveLegalSettings()">Сохранить реквизиты</button>
+        </div>
+        <div id="legal-result"></div>
+        <p class="check-hint">Страницы всегда доступны по ссылкам: <a href="/offer" target="_blank" id="legal-offer-link">/offer</a> · <a href="/privacy" target="_blank" id="legal-privacy-link">/privacy</a> — незаполненные поля показываются пометкой, что их надо указать, страница не ломается.</p>
+
+        <h3 style="font-size:14px;margin:24px 0 12px">ЮKassa — ключи API</h3>
+        <div id="yookassa-status" class="page-sub" style="margin-bottom:12px"></div>
+        <div class="form-row">
+          <div><label class="f">shop_id</label><input type="text" id="yk-shop-id" placeholder="123456"></div>
+          <div><label class="f">Секретный ключ</label><input type="password" id="yk-secret-key" placeholder="live_..."></div>
+          <div style="flex:0"><label class="f">&nbsp;</label><button class="btn" onclick="saveYookassaSettings()">Проверить и сохранить</button></div>
+        </div>
+        <p class="check-hint">Панель сама постучится в ЮKassa (<code>/v3/me</code>) и сохранит ключи только если они рабочие. После сохранения включаются приём оплаты и вебхуки; бот перезапустится сам, для самой панели (обработка вебхуков) один раз выполни на сервере <code>mbs restart</code>.</p>
+        <div id="yookassa-result"></div>
+      </div>
+
+      <div class="section" style="margin-top:20px">
+        <div class="section-head"><h2>История</h2></div>
+        <div class="table-wrap"><table><thead><tr>
+          <th>Пользователь</th><th>Сервер</th><th>Тариф</th><th>Провайдер</th><th>Сумма</th><th>Создан</th><th>Статус</th><th></th>
+        </tr></thead><tbody id="payments-body"></tbody></table></div>
+      </div>
     </div>
 
     <div id="view-docs" class="view">
@@ -526,7 +570,7 @@
       <div class="doc-block">
         <h2>Пароль и безопасность</h2>
         <p>Пароль админ-панели меняется командой <code>mbs pass</code> на сервере (без аргумента — сгенерит случайный). Панель физически откажется стартовать, если в <code>.env</code> стоит "change-me"/"admin"/что-то короче 8 символов — так что пропустить это не выйдет по-тихому.</p>
-        <p>Сессия логина живёт в httpOnly-куке, на <code>/admin/api/login</code> висит rate-limit (5 попыток в минуту с одного IP). SSH-доступ на сервер — сам по себе, панель на него не влияет; отдельно стоит подумать про отключение root-логина по паролю в пользу ключей, если этого ещё не сделано.</p>
+        <p>Сессия логина живёт в httpOnly-куке, опционально поверх пароля — 2FA (TOTP). На <code>/admin/api/login</code> и <code>/admin/api/login/totp</code> висит rate-limit (10 попыток за 15 минут на пароль, 10 за 5 минут на код — с одного IP). SSH-доступ на сервер — сам по себе, панель на него не влияет; отдельно стоит подумать про отключение root-логина по паролю в пользу ключей, если этого ещё не сделано.</p>
       </div>
 
       <div class="doc-block">
@@ -685,7 +729,7 @@ function showView(name) {
   if (name === "gifts") loadGifts();
   if (name === "nodes") loadNodes();
   if (name === "traffic") loadTraffic();
-  if (name === "payments") loadPayments();
+  if (name === "payments") { loadPayments(); loadPaymentsSettings(); }
   if (name === "settings") { loadBotSettings(); loadAdmins(); loadTotpStatus(); }
 }
 
@@ -860,6 +904,20 @@ function initDropdowns() {
   });
   DD.ucGrantNode = createDropdown("uc-grant-node", { options: [], placeholder: "Сервер" });
   DD.ucGrantPlan = createDropdown("uc-grant-plan", { options: [], placeholder: "Срок" });
+  DD.legalType = createDropdown("legal-type", {
+    options: [
+      { value: "self", label: "Самозанятый" },
+      { value: "ip", label: "ИП" },
+      { value: "ooo", label: "ООО" },
+    ],
+    value: "self", placeholder: "Кто ты",
+    onChange: (type) => {
+      const label = document.getElementById("legal-name-label");
+      const input = document.getElementById("legal-name");
+      if (type === "ooo") { label.textContent = "Название"; input.placeholder = 'ООО «Ромашка»'; }
+      else { label.textContent = "ФИО"; input.placeholder = "Иванов Иван Иванович"; }
+    },
+  });
 }
 
 const ICONS = {
@@ -938,6 +996,59 @@ async function checkPayment(id, btn) {
     await api(`/admin/api/payments/${id}/check`, { method: "POST" });
   } finally {
     loadPayments();
+  }
+}
+
+async function loadPaymentsSettings() {
+  const [legalRes, ykRes] = await Promise.all([
+    api("/admin/api/payments/legal-settings"),
+    api("/admin/api/payments/yookassa-settings"),
+  ]);
+  document.getElementById("legal-name").value = legalRes.LEGAL_NAME || "";
+  document.getElementById("legal-inn").value = legalRes.LEGAL_INN || "";
+  document.getElementById("legal-refund").value = legalRes.REFUND_HOURS || "24";
+  document.getElementById("legal-contact").value = legalRes.SUPPORT_CONTACT || "";
+  document.getElementById("legal-email").value = legalRes.SUPPORT_EMAIL || "";
+
+  document.getElementById("yk-shop-id").value = ykRes.shop_id || "";
+  const status = document.getElementById("yookassa-status");
+  if (ykRes.enabled && ykRes.has_secret) {
+    status.innerHTML = '<span class="badge ok">подключена</span> shop_id: ' + esc(ykRes.shop_id);
+  } else {
+    status.innerHTML = '<span class="badge bad">не настроена</span>';
+  }
+}
+
+async function saveLegalSettings() {
+  const result = document.getElementById("legal-result");
+  const body = {
+    LEGAL_NAME: document.getElementById("legal-name").value.trim(),
+    LEGAL_INN: document.getElementById("legal-inn").value.trim(),
+    REFUND_HOURS: document.getElementById("legal-refund").value.trim() || "24",
+    SUPPORT_CONTACT: document.getElementById("legal-contact").value.trim(),
+    SUPPORT_EMAIL: document.getElementById("legal-email").value.trim(),
+  };
+  try {
+    await api("/admin/api/payments/legal-settings", { method: "POST", body: JSON.stringify(body) });
+    result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--green)">Сохранено — страницы /offer и /privacy обновились сразу, без рестарта</p>';
+  } catch (e) {
+    result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--red)">Не получилось: ' + esc(e.message) + '</p>';
+  }
+}
+
+async function saveYookassaSettings() {
+  const shop_id = document.getElementById("yk-shop-id").value.trim();
+  const secret_key = document.getElementById("yk-secret-key").value.trim();
+  const result = document.getElementById("yookassa-result");
+  if (!shop_id || !secret_key) return;
+  result.innerHTML = '<p class="page-sub" style="margin-top:10px">Проверяю ключи у ЮKassa…</p>';
+  try {
+    const res = await api("/admin/api/payments/yookassa-settings", { method: "POST", body: JSON.stringify({ shop_id, secret_key }) });
+    result.innerHTML = `<p class="page-sub" style="margin-top:10px;color:var(--green)">Ключи рабочие, сохранено.${res.restarted_bot ? " Бот перезапущен." : " Бот сам не перезапустился — выполни mbs restart."} Для приёма вебхуков панелью выполни на сервере <code>mbs restart</code>.</p>`;
+    document.getElementById("yk-secret-key").value = "";
+    loadPaymentsSettings();
+  } catch (e) {
+    result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--red)">Не получилось: ' + esc(e.message) + '</p>';
   }
 }
 
