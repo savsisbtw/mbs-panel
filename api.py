@@ -1010,8 +1010,17 @@ def admin_delete_device(tg_id: int, device_id: int, request: Request):
 @app.post("/admin/api/users/{tg_id}/hwid-limit")
 def admin_set_hwid_limit(tg_id: int, request: Request, body: dict = Body(...)):
     require_admin(request)
-    limit = body.get("limit")
-    db.set_user_hwid_limit(tg_id, int(limit) if limit else None)
+    raw_limit = body.get("limit")
+    if raw_limit in (None, ""):
+        db.set_user_hwid_limit(tg_id, None)
+        return {"ok": True}
+    try:
+        limit = int(raw_limit)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "лимит должен быть целым числом")
+    if not (0 <= limit <= 1000):
+        raise HTTPException(400, "лимит должен быть от 0 до 1000")
+    db.set_user_hwid_limit(tg_id, limit)
     return {"ok": True}
 
 
@@ -1178,7 +1187,12 @@ def admin_provision_guide(request: Request, body: dict = Body(...)):
     require_admin(request)
     label = body["label"]
     address = body["address"]
-    port = int(body.get("port", 443))
+    try:
+        port = int(body.get("port", 443))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "port должен быть числом")
+    if not (1 <= port <= 65535):
+        raise HTTPException(400, "port должен быть от 1 до 65535")
     sni = body.get("sni") or "www.wildberries.ru"
     include_ws = bool(body.get("include_ws"))
     include_hysteria2 = bool(body.get("include_hysteria2"))
@@ -1189,7 +1203,12 @@ def admin_provision_guide(request: Request, body: dict = Body(...)):
 
     hysteria_port = hysteria_password = hysteria_obfs_password = None
     if include_hysteria2:
-        hysteria_port = int(body.get("hysteria_port", 443))
+        try:
+            hysteria_port = int(body.get("hysteria_port", 443))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "hysteria_port должен быть числом")
+        if not (1 <= hysteria_port <= 65535):
+            raise HTTPException(400, "hysteria_port должен быть от 1 до 65535")
         hysteria_password, hysteria_obfs_password = nodeprov.generate_hysteria_credentials()
 
     node, token = db.create_pending_node(
