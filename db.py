@@ -143,6 +143,10 @@ _NEW_ADMIN_COLUMNS = {
     "totp_secret": "TEXT",
 }
 
+_NEW_SUBSCRIPTION_COLUMNS = {
+    "held_at": "TEXT",
+}
+
 
 def _migrate():
     with get_conn() as conn:
@@ -163,6 +167,10 @@ def _migrate():
         for name, decl in _NEW_ADMIN_COLUMNS.items():
             if name not in acols:
                 conn.execute(f"ALTER TABLE admins ADD COLUMN {name} {decl}")
+        subcols = {r["name"] for r in conn.execute("PRAGMA table_info(subscriptions)").fetchall()}
+        for name, decl in _NEW_SUBSCRIPTION_COLUMNS.items():
+            if name not in subcols:
+                conn.execute(f"ALTER TABLE subscriptions ADD COLUMN {name} {decl}")
         if needs_sort_order_backfill:
             rows = conn.execute(
                 "SELECT code FROM nodes ORDER BY (code='de1') DESC, created_at ASC"
@@ -381,7 +389,7 @@ def create_subscription(tg_id: int, node: str, plan_days: int, plan_code: str, s
 
 
 def list_active_subscriptions(tg_id: int | None = None, node: str | None = None):
-    q = "SELECT * FROM subscriptions WHERE active=1 AND expires_at > ?"
+    q = "SELECT * FROM subscriptions WHERE active=1 AND held_at IS NULL AND expires_at > ?"
     params = [now_iso()]
     if tg_id is not None:
         q += " AND tg_id=?"
@@ -595,6 +603,34 @@ def list_all_subscriptions(limit: int = 200):
 def revoke_subscription(client_uuid: str):
     with get_conn() as conn:
         conn.execute("UPDATE subscriptions SET active=0 WHERE uuid=?", (client_uuid,))
+
+
+def hold_subscription(client_uuid: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE subscriptions SET held_at=? WHERE uuid=? AND active=1 AND held_at IS NULL AND expires_at > ?",
+            (now_iso(), client_uuid, now_iso()),
+        )
+        return cur.rowcount > 0
+
+
+def resume_subscription(client_uuid: str):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM subscriptions WHERE uuid=? AND held_at IS NOT NULL", (client_uuid,)
+        ).fetchone()
+        if not row:
+            return None
+        held_at = datetime.datetime.fromisoformat(row["held_at"])
+        shift = datetime.datetime.utcnow() - held_at
+        new_expires = (datetime.datetime.fromisoformat(row["expires_at"]) + shift).isoformat()
+        cur = conn.execute(
+            "UPDATE subscriptions SET expires_at=?, held_at=NULL WHERE uuid=? AND held_at IS NOT NULL",
+            (new_expires, client_uuid),
+        )
+        if cur.rowcount == 0:
+            return None
+    return get_subscription(client_uuid)
 
 
 def get_subscription(client_uuid: str):

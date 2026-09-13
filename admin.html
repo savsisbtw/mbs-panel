@@ -621,6 +621,11 @@
       </div>
 
       <div class="doc-block">
+        <h2>Пауза подписки</h2>
+        <p>Кнопка «Пауза» у активной подписки (в Подписках и в карточке юзера) — не то же самое, что «Отозвать». Пауза сразу убирает клиента из Xray (доступ пропадает), но остаток срока сохраняется: сколько дней было на паузе — ровно столько добавится к <code>expires_at</code> при нажатии «Возобновить». «Отозвать», наоборот, необратимо — новую подписку тогда выдаёт только «Карточка» → ручная выдача.</p>
+      </div>
+
+      <div class="doc-block">
         <h2>fail2ban</h2>
         <p><code>install.sh</code> ставит и включает fail2ban автоматически (дефолтный jail — защита SSH от перебора паролей). Проверить, что работает:</p>
         <div class="code-box">fail2ban-client status<button class="copy-btn" onclick="copyText('fail2ban-client status')">Копировать</button></div>
@@ -1383,7 +1388,8 @@ async function restoreBackup() {
 }
 
 function fmtDate(iso) { return iso ? iso.slice(0, 10) : "—"; }
-function statusBadge(active, daysLeft) {
+function statusBadge(active, daysLeft, held) {
+  if (held) return '<span class="badge warn">на паузе</span>';
   if (!active) return '<span class="badge bad">истекла</span>';
   if (daysLeft <= 2) return '<span class="badge warn">' + daysLeft + ' дн.</span>';
   return '<span class="badge ok">' + daysLeft + ' дн.</span>';
@@ -1402,7 +1408,7 @@ async function loadDashboard() {
   const body = document.getElementById("recent-subs-body");
   body.innerHTML = recent.length ? recent.map((s, i) => `
     <tr ${rowAttr(i)}><td>${s.username ? "@" + esc(s.username) : "tg" + s.tg_id}</td><td>${esc(s.node_label)}</td><td>${esc(s.plan_label)}</td>
-    <td>${fmtDate(s.expires_at)}</td><td>${statusBadge(s.active, s.days_left)}</td></tr>
+    <td>${fmtDate(s.expires_at)}</td><td>${statusBadge(s.active, s.days_left, s.held_at)}</td></tr>
   `).join("") : '<tr><td colspan="5"><div class="empty">Пока нет подписок</div></td></tr>';
 }
 
@@ -1411,9 +1417,12 @@ async function loadSubscriptions() {
   const body = document.getElementById("subs-body");
   body.innerHTML = subs.length ? subs.map((s, i) => `
     <tr ${rowAttr(i)}><td>${s.username ? "@" + esc(s.username) : "tg" + s.tg_id}</td><td>${esc(s.node_label)}</td><td>${esc(s.plan_label)}</td>
-    <td>${fmtDate(s.created_at)}</td><td>${fmtDate(s.expires_at)}</td><td>${statusBadge(s.active, s.days_left)}</td>
+    <td>${fmtDate(s.created_at)}</td><td>${fmtDate(s.expires_at)}</td><td>${statusBadge(s.active, s.days_left, s.held_at)}</td>
     <td>
       <button class="muted-btn" onclick="openUserCard(${s.tg_id}, '${esc(s.username ? '@' + s.username : 'tg' + s.tg_id)}')">Карточка</button>
+      ${s.active ? (s.held_at
+        ? `<button class="muted-btn" onclick="resumeSub('${s.uuid}')">Возобновить</button>`
+        : `<button class="muted-btn" onclick="holdSub('${s.uuid}')">Пауза</button>`) : ""}
       ${s.active ? `<button class="muted-btn" onclick="revokeSub('${s.uuid}')">Отозвать</button>` : ""}
     </td></tr>
   `).join("") : '<tr><td colspan="7"><div class="empty">Пока нет подписок</div></td></tr>';
@@ -1445,15 +1454,21 @@ function switchUserTab(tab) {
   document.getElementById("uc-tab-subs").style.display = tab === "subs" ? "block" : "none";
   document.getElementById("uc-tab-devices").style.display = tab === "devices" ? "block" : "none";
 }
+function refreshUserCard() {
+  openUserCard(devicesTgId, document.getElementById("devices-title").textContent.replace("Карточка: ", ""));
+}
 function renderUcSubs(subs) {
   const list = document.getElementById("uc-subs-list");
   list.innerHTML = subs.length ? subs.map((s, i) => `
     <div class="uc-sub-row reveal" style="animation-delay:${Math.min(i, 10) * 0.025}s">
       <div>
         <div>${esc(s.node_label)} — ${esc(s.plan_label)}</div>
-        <div class="page-sub" style="margin:2px 0 0">до ${fmtDate(s.expires_at)} · ${statusBadge(s.active, s.days_left)}</div>
+        <div class="page-sub" style="margin:2px 0 0">до ${fmtDate(s.expires_at)} · ${statusBadge(s.active, s.days_left, s.held_at)}</div>
       </div>
-      ${s.active ? `<button class="muted-btn" onclick="revokeSub('${s.uuid}'); openUserCard(devicesTgId, document.getElementById('devices-title').textContent.replace('Карточка: ',''))">Отозвать</button>` : ""}
+      ${s.active ? (s.held_at
+        ? `<button class="muted-btn" onclick="resumeSub('${s.uuid}').then(refreshUserCard)">Возобновить</button>`
+        : `<button class="muted-btn" onclick="holdSub('${s.uuid}').then(refreshUserCard)">Пауза</button>`) : ""}
+      ${s.active ? `<button class="muted-btn" onclick="revokeSub('${s.uuid}').then(refreshUserCard)">Отозвать</button>` : ""}
     </div>
   `).join("") : '<div class="empty">Пока нет подписок</div>';
 }
@@ -1489,6 +1504,16 @@ async function saveHwidLimit() {
 async function revokeSub(uuid) {
   if (!confirm("Отозвать подписку?")) return;
   await api(`/admin/api/subscriptions/${uuid}/revoke`, { method: "POST" });
+  loadSubscriptions();
+}
+
+async function holdSub(uuid) {
+  await api(`/admin/api/subscriptions/${uuid}/hold`, { method: "POST" });
+  loadSubscriptions();
+}
+
+async function resumeSub(uuid) {
+  await api(`/admin/api/subscriptions/${uuid}/resume`, { method: "POST" });
   loadSubscriptions();
 }
 

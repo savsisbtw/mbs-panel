@@ -51,9 +51,10 @@ def require_admin(request: Request):
         raise HTTPException(401, "unauthorized")
 
 
-def _days_left(expires_at: str) -> int:
-    exp = datetime.datetime.fromisoformat(expires_at)
-    delta = exp - datetime.datetime.utcnow()
+def _days_left(sub: dict) -> int:
+    exp = datetime.datetime.fromisoformat(sub["expires_at"])
+    reference = datetime.datetime.fromisoformat(sub["held_at"]) if sub.get("held_at") else datetime.datetime.utcnow()
+    delta = exp - reference
     return max(0, delta.days)
 
 
@@ -263,7 +264,7 @@ def cabinet(token: str):
             "plan": s["plan"],
             "plan_label": plan["label"] if plan else s["plan"],
             "expires_at": s["expires_at"],
-            "days_left": _days_left(s["expires_at"]),
+            "days_left": _days_left(s),
         })
     return {
         "username": user["username"],
@@ -871,7 +872,7 @@ def admin_subscriptions(request: Request, limit: int = 200):
             **s,
             "node_label": node["label"] if node else s["node"],
             "plan_label": plan["label"] if plan else s["plan"],
-            "days_left": _days_left(s["expires_at"]),
+            "days_left": _days_left(s),
         })
     return out
 
@@ -887,6 +888,32 @@ def admin_revoke_subscription(uuid: str, request: Request):
         xray_manager.remove_client_from_node(node, uuid)
     db.revoke_subscription(uuid)
     return {"ok": True}
+
+
+@app.post("/admin/api/subscriptions/{uuid}/hold")
+def admin_hold_subscription(uuid: str, request: Request):
+    require_admin(request)
+    sub = db.get_subscription(uuid)
+    if not sub:
+        raise HTTPException(404, "not found")
+    if not db.hold_subscription(uuid):
+        raise HTTPException(400, "подписка уже на паузе, истекла или отозвана")
+    node = db.get_node(sub["node"])
+    if node:
+        xray_manager.remove_client_from_node(node, uuid)
+    return {"ok": True}
+
+
+@app.post("/admin/api/subscriptions/{uuid}/resume")
+def admin_resume_subscription(uuid: str, request: Request):
+    require_admin(request)
+    resumed = db.resume_subscription(uuid)
+    if not resumed:
+        raise HTTPException(400, "подписка не на паузе")
+    node = db.get_node(resumed["node"])
+    if node:
+        xray_manager.add_client_to_node(node, uuid, email=uuid)
+    return {"ok": True, "expires_at": resumed["expires_at"]}
 
 
 @app.post("/admin/api/subscriptions/{uuid}/reset-traffic")
@@ -919,7 +946,7 @@ def admin_user_card(tg_id: int, request: Request):
             **s,
             "node_label": node["label"] if node else s["node"],
             "plan_label": plan["label"] if plan else s["plan"],
-            "days_left": _days_left(s["expires_at"]),
+            "days_left": _days_left(s),
         })
     return {
         "tg_id": user["tg_id"],

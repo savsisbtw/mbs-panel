@@ -210,6 +210,24 @@ jobs:
           assert db.count_recent_login_attempts(ip, "password", minutes=15) == 0
           print("rate-limit counters OK")
 
+          import datetime as dt
+
+          hold_sub = db.create_subscription(999, "n1", 30, "1m", source="bot")
+          original_expires = dt.datetime.fromisoformat(hold_sub["expires_at"])
+          assert db.hold_subscription(hold_sub["uuid"])
+          assert db.hold_subscription(hold_sub["uuid"]) is False
+          assert len(db.list_active_subscriptions(tg_id=999)) == 0, "held sub must not count as active"
+          with db.get_conn() as conn:
+              simulated = (dt.datetime.utcnow() - dt.timedelta(hours=5)).isoformat()
+              conn.execute("UPDATE subscriptions SET held_at=? WHERE uuid=?", (simulated, hold_sub["uuid"]))
+          resumed = db.resume_subscription(hold_sub["uuid"])
+          assert resumed["held_at"] is None
+          shift_hours = (dt.datetime.fromisoformat(resumed["expires_at"]) - original_expires).total_seconds() / 3600
+          assert 4.9 <= shift_hours <= 5.1, f"expected ~5h shift, got {shift_hours}"
+          assert len(db.list_active_subscriptions(tg_id=999)) == 1, "resumed sub must count as active again"
+          assert db.resume_subscription(hold_sub["uuid"]) is None
+          print("subscription hold/resume OK")
+
           print("all v1.1.0 feature smoke tests passed")
           PYEOF
 
