@@ -1802,12 +1802,28 @@ async function generateGuide() {
     <p class="page-sub" style="margin-top:12px" id="guide-status">Ожидаю установки…</p>
   `;
   if (pollTimer) clearInterval(pollTimer);
+  let pollAttempts = 0, pollErrors = 0;
   pollTimer = setInterval(async () => {
-    const st = await api(`/admin/api/nodes/${res.code}/status`);
+    pollAttempts++;
+    let st;
+    try {
+      st = await api(`/admin/api/nodes/${res.code}/status`);
+      pollErrors = 0;
+    } catch (e) {
+      pollErrors++;
+      if (pollErrors >= 5) {
+        clearInterval(pollTimer);
+        document.getElementById("guide-status").innerHTML = '<span class="badge bad">Не получилось проверить статус (' + esc(e.message) + ') — проверь вручную кнопкой «Проверить» у ноды</span>';
+      }
+      return;
+    }
     if (st.status === "active") {
       clearInterval(pollTimer);
       document.getElementById("guide-status").innerHTML = '<span class="badge ok">Установлено и подключено</span>';
       loadNodes();
+    } else if (pollAttempts >= 150) {
+      clearInterval(pollTimer);
+      document.getElementById("guide-status").innerHTML = '<span class="badge warn">Не дождались за 10 минут — нода появится в списке сама, когда установка на сервере закончится</span>';
     }
   }, 4000);
 }
