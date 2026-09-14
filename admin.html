@@ -1335,7 +1335,13 @@ async function loadTotpStatus() {
 }
 
 async function startEnableTotp() {
-  const res = await api("/admin/api/2fa/setup", { method: "POST" });
+  let res;
+  try {
+    res = await api("/admin/api/2fa/setup", { method: "POST" });
+  } catch (e) {
+    alert("Не получилось: " + e.message);
+    return;
+  }
   document.getElementById("totp-secret-display").textContent = res.secret;
   document.getElementById("totp-setup-box").dataset.secret = res.secret;
   document.getElementById("totp-setup-box").style.display = "block";
@@ -1525,7 +1531,11 @@ async function grantSubscription() {
   const node = DD.ucGrantNode.getValue();
   const plan = DD.ucGrantPlan.getValue();
   if (!node || !plan) return;
-  await api(`/admin/api/users/${devicesTgId}/grant`, { method: "POST", body: JSON.stringify({ node, plan }) });
+  try {
+    await api(`/admin/api/users/${devicesTgId}/grant`, { method: "POST", body: JSON.stringify({ node, plan }) });
+  } catch (e) {
+    alert("Не получилось: " + e.message);
+  }
   openUserCard(devicesTgId, document.getElementById("devices-title").textContent.replace("Карточка: ", ""));
 }
 function renderDevices(devices) {
@@ -1541,28 +1551,48 @@ function renderDevices(devices) {
   `).join("") : '<div class="empty">Нет привязанных устройств</div>';
 }
 async function deleteDevice(deviceId) {
-  await api(`/admin/api/users/${devicesTgId}/devices/${deviceId}`, { method: "DELETE" });
+  try {
+    await api(`/admin/api/users/${devicesTgId}/devices/${deviceId}`, { method: "DELETE" });
+  } catch (e) {
+    alert("Не получилось: " + e.message);
+  }
   const data = await api(`/admin/api/users/${devicesTgId}`);
   renderDevices(data.devices);
 }
 async function saveHwidLimit() {
   const val = document.getElementById("devices-limit").value.trim();
-  await api(`/admin/api/users/${devicesTgId}/hwid-limit`, { method: "POST", body: JSON.stringify({ limit: val || null }) });
+  try {
+    await api(`/admin/api/users/${devicesTgId}/hwid-limit`, { method: "POST", body: JSON.stringify({ limit: val || null }) });
+  } catch (e) {
+    alert("Не получилось: " + e.message);
+  }
 }
 
 async function revokeSub(uuid) {
   if (!confirm("Отозвать подписку?")) return;
-  await api(`/admin/api/subscriptions/${uuid}/revoke`, { method: "POST" });
+  try {
+    await api(`/admin/api/subscriptions/${uuid}/revoke`, { method: "POST" });
+  } catch (e) {
+    alert("Не получилось: " + e.message);
+  }
   loadSubscriptions();
 }
 
 async function holdSub(uuid) {
-  await api(`/admin/api/subscriptions/${uuid}/hold`, { method: "POST" });
+  try {
+    await api(`/admin/api/subscriptions/${uuid}/hold`, { method: "POST" });
+  } catch (e) {
+    alert("Не получилось: " + e.message);
+  }
   loadSubscriptions();
 }
 
 async function resumeSub(uuid) {
-  await api(`/admin/api/subscriptions/${uuid}/resume`, { method: "POST" });
+  try {
+    await api(`/admin/api/subscriptions/${uuid}/resume`, { method: "POST" });
+  } catch (e) {
+    alert("Не получилось: " + e.message);
+  }
   loadSubscriptions();
 }
 
@@ -1590,9 +1620,14 @@ async function loadGifts() {
 async function createGift() {
   const node = DD.giftNode.getValue();
   const plan = DD.giftPlan.getValue();
-  const res = await api("/admin/api/gift-codes", { method: "POST", body: JSON.stringify({ node, plan }) });
-  document.getElementById("gift-result").innerHTML = `<div class="code-box" style="margin-top:12px">${res.link}<button class="copy-btn" onclick="copyText('${res.link}')">Копировать</button></div>`;
-  loadGifts();
+  const result = document.getElementById("gift-result");
+  try {
+    const res = await api("/admin/api/gift-codes", { method: "POST", body: JSON.stringify({ node, plan }) });
+    result.innerHTML = `<div class="code-box" style="margin-top:12px">${res.link}<button class="copy-btn" onclick="copyText('${res.link}')">Копировать</button></div>`;
+    loadGifts();
+  } catch (e) {
+    result.innerHTML = '<p class="page-sub" style="margin-top:12px;color:var(--red)">Не получилось: ' + esc(e.message) + '</p>';
+  }
 }
 
 function copyText(t) { navigator.clipboard.writeText(t); }
@@ -1720,12 +1755,20 @@ async function saveEditNode() {
 }
 
 async function toggleNode(code, enabled) {
-  await api(`/admin/api/nodes/${code}`, { method: "PATCH", body: JSON.stringify({ enabled }) });
+  try {
+    await api(`/admin/api/nodes/${code}`, { method: "PATCH", body: JSON.stringify({ enabled }) });
+  } catch (e) {
+    alert("Не получилось: " + e.message);
+  }
   loadNodes();
 }
 async function deleteNode(code) {
   if (!confirm("Удалить ноду?")) return;
-  await api(`/admin/api/nodes/${code}`, { method: "DELETE" });
+  try {
+    await api(`/admin/api/nodes/${code}`, { method: "DELETE" });
+  } catch (e) {
+    alert("Не получилось: " + e.message);
+  }
   loadNodes();
 }
 
@@ -1745,8 +1788,15 @@ async function generateGuide() {
   const include_hysteria2 = document.getElementById("ng-hy").checked;
   const hysteria_port = parseInt(document.getElementById("ng-hy-port").value || "443");
   if (!label || !address) return;
-  const res = await api("/admin/api/nodes/provision-guide", { method: "POST", body: JSON.stringify({ label, address, port, sni, include_ws, include_hysteria2, hysteria_port }) });
-  document.getElementById("guide-result").innerHTML = `
+  const guideResult = document.getElementById("guide-result");
+  let res;
+  try {
+    res = await api("/admin/api/nodes/provision-guide", { method: "POST", body: JSON.stringify({ label, address, port, sni, include_ws, include_hysteria2, hysteria_port }) });
+  } catch (e) {
+    guideResult.innerHTML = '<p class="page-sub" style="margin-top:12px;color:var(--red)">Не получилось: ' + esc(e.message) + '</p>';
+    return;
+  }
+  guideResult.innerHTML = `
     <p class="page-sub" style="margin:16px 0 8px">Выполни на новом сервере:</p>
     <div class="code-box">${res.command}<button class="copy-btn" onclick="copyText('${res.command}')">Копировать</button></div>
     <p class="page-sub" style="margin-top:12px" id="guide-status">Ожидаю установки…</p>
@@ -1774,9 +1824,14 @@ async function createManualNode() {
     shared_uuid: document.getElementById("nm-uuid").value.trim() || null,
     kind: document.getElementById("nm-uuid").value.trim() ? "external" : "managed",
   };
-  await api("/admin/api/nodes", { method: "POST", body: JSON.stringify(body) });
-  document.getElementById("manual-result").innerHTML = '<p class="page-sub" style="margin-top:12px">Нода добавлена.</p>';
-  loadNodes();
+  const result = document.getElementById("manual-result");
+  try {
+    await api("/admin/api/nodes", { method: "POST", body: JSON.stringify(body) });
+    result.innerHTML = '<p class="page-sub" style="margin-top:12px">Нода добавлена.</p>';
+    loadNodes();
+  } catch (e) {
+    result.innerHTML = '<p class="page-sub" style="margin-top:12px;color:var(--red)">Не получилось: ' + esc(e.message) + '</p>';
+  }
 }
 
 function applyBrandName(name) {
