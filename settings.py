@@ -87,3 +87,17 @@ def get_hwid_settings() -> dict:
         "enabled": _bool(raw.get("HWID_LIMIT_ENABLED"), config.HWID_LIMIT_ENABLED),
         "fallback_limit": limit if limit > 0 else config.HWID_FALLBACK_LIMIT,
     }
+
+
+def get_referral_settings() -> dict:
+    raw = legal.read_env_vars(["REFERRAL_ENABLED", "REFERRAL_BONUS_DAYS"])
+    days = _positive_int(raw.get("REFERRAL_BONUS_DAYS"), config.REFERRAL_BONUS_DAYS)
+    return {
+        "enabled": _bool(raw.get("REFERRAL_ENABLED"), config.REFERRAL_ENABLED),
+        "bonus_days": days if days > 0 else config.REFERRAL_BONUS_DAYS,
+    }
+
+
+def set_referral_settings(enabled: bool, bonus_days: int):
+    legal.update_env_var("REFERRAL_ENABLED", "true" if enabled else "false")
+    legal.update_env_var("REFERRAL_BONUS_DAYS", str(int(bonus_days)))

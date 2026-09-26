@@ -33,11 +33,20 @@ def main_menu_kb(tg_id: int) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text="Получить VPN", callback_data="menu:get")],
         [InlineKeyboardButton(text="Моя подписка", callback_data="menu:mysub")],
+        [InlineKeyboardButton(text="Пригласить друга", callback_data="menu:referral")],
         [InlineKeyboardButton(text="О сервисе", callback_data="menu:about")],
     ]
     if is_admin(tg_id):
         rows.append([InlineKeyboardButton(text="Админка", callback_data="menu:admin")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def get_bot_username() -> str:
+    global _bot_username
+    if _bot_username is None:
+        me = await bot.get_me()
+        _bot_username = me.username
+    return _bot_username
 
 
 def nodes_kb(prefix: str) -> InlineKeyboardMarkup:
@@ -90,6 +99,12 @@ async def send_main_menu(message: Message):
 async def start_deeplink(message: Message, command: CommandObject):
     user = db.get_or_create_user(message.from_user.id, message.from_user.username)
     payload = command.args or ""
+    if payload.startswith("ref_") or payload.startswith("ref-"):
+        ref_code = payload[4:]
+        referrer = db.get_user_by_ref_code(ref_code)
+        if referrer and settings.get_referral_settings()["enabled"]:
+            db.set_referred_by(message.from_user.id, referrer["tg_id"])
+        return await send_main_menu(message)
     if payload.startswith("gift_") or payload.startswith("gift-"):
         code = payload[5:]
         gift, err = db.redeem_gift_code(code, message.from_user.id)
@@ -137,6 +152,32 @@ async def cb_menu_main(cb: CallbackQuery):
 async def cb_about(cb: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Назад", callback_data="menu:main")]])
     await cb.message.edit_text(about_text(), reply_markup=kb)
+    await cb.answer()
+
+
+@dp.callback_query(F.data == "menu:referral")
+async def cb_referral(cb: CallbackQuery):
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Назад", callback_data="menu:main")]])
+    ref_settings = settings.get_referral_settings()
+    if not ref_settings["enabled"]:
+        await cb.message.edit_text("Реферальная программа сейчас отключена.", reply_markup=kb)
+        return await cb.answer()
+    user = db.get_or_create_user(cb.from_user.id, cb.from_user.username)
+    stats = db.referral_stats(cb.from_user.id)
+    username = await get_bot_username()
+    link = f"https://t.me/{username}?start=ref_{user['ref_code']}"
+    days = ref_settings["bonus_days"]
+    text = (
+        f"<b>Пригласи друга</b>\n\n"
+        f"За каждого друга, который активирует подписку по твоей ссылке, "
+        f"вы <b>оба</b> получаете +{days} дн. к подписке.\n\n"
+        f"{DIVIDER}\n"
+        f"Твоя ссылка:\n<code>{link}</code>\n\n"
+        f"Приглашено: {stats['referred_count']}\n"
+    )
+    if stats["bonus_days_pending"]:
+        text += f"Накоплено бонусных дней (зачислятся при следующей подписке): {stats['bonus_days_pending']}\n"
+    await cb.message.edit_text(text, reply_markup=kb)
     await cb.answer()
 
 

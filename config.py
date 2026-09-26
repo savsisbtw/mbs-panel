@@ -120,3 +120,6 @@ PLATEGA_SECRET = env("PLATEGA_SECRET", "")
 
 HWID_LIMIT_ENABLED = env("HWID_LIMIT_ENABLED", "false").lower() == "true"
 HWID_FALLBACK_LIMIT = int(env("HWID_FALLBACK_LIMIT", "3"))
+
+REFERRAL_ENABLED = env("REFERRAL_ENABLED", "true").lower() == "true"
+REFERRAL_BONUS_DAYS = int(env("REFERRAL_BONUS_DAYS", "3"))

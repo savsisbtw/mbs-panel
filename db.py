@@ -133,6 +133,10 @@ _NEW_NODE_COLUMNS = {
 
 _NEW_USER_COLUMNS = {
     "hwid_limit": "INTEGER",
+    "ref_code": "TEXT",
+    "referred_by": "INTEGER",
+    "referral_rewarded": "INTEGER NOT NULL DEFAULT 0",
+    "bonus_days_pending": "INTEGER NOT NULL DEFAULT 0",
 }
 
 _NEW_ADMIN_SESSION_COLUMNS = {
@@ -159,6 +163,7 @@ def _migrate():
         for name, decl in _NEW_USER_COLUMNS.items():
             if name not in ucols:
                 conn.execute(f"ALTER TABLE users ADD COLUMN {name} {decl}")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_ref_code ON users(ref_code)")
         scols = {r["name"] for r in conn.execute("PRAGMA table_info(admin_sessions)").fetchall()}
         for name, decl in _NEW_ADMIN_SESSION_COLUMNS.items():
             if name not in scols:
@@ -353,20 +358,95 @@ def delete_node(code: str):
         conn.execute("DELETE FROM nodes WHERE code=?", (code,))
 
 
+def _generate_ref_code(conn) -> str:
+    for _ in range(20):
+        code = secrets.token_hex(4)
+        if not conn.execute("SELECT 1 FROM users WHERE ref_code=?", (code,)).fetchone():
+            return code
+    raise RuntimeError("could not generate a unique ref_code")
+
+
 def get_or_create_user(tg_id: int, username: str | None):
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM users WHERE tg_id=?", (tg_id,)).fetchone()
         if row:
             if username and row["username"] != username:
                 conn.execute("UPDATE users SET username=? WHERE tg_id=?", (username, tg_id))
+            if not row["ref_code"]:
+                conn.execute(
+                    "UPDATE users SET ref_code=? WHERE tg_id=?", (_generate_ref_code(conn), tg_id)
+                )
+            row = conn.execute("SELECT * FROM users WHERE tg_id=?", (tg_id,)).fetchone()
             return dict(row)
         token = secrets.token_hex(16)
+        ref_code = _generate_ref_code(conn)
         conn.execute(
-            "INSERT INTO users (tg_id, token, username, created_at) VALUES (?,?,?,?)",
-            (tg_id, token, username, now_iso()),
+            "INSERT INTO users (tg_id, token, username, ref_code, created_at) VALUES (?,?,?,?,?)",
+            (tg_id, token, username, ref_code, now_iso()),
         )
         row = conn.execute("SELECT * FROM users WHERE tg_id=?", (tg_id,)).fetchone()
         return dict(row)
+
+
+def get_user_by_ref_code(ref_code: str):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM users WHERE ref_code=?", (ref_code,)).fetchone()
+        return dict(row) if row else None
+
+
+def set_referred_by(tg_id: int, referrer_tg_id: int) -> bool:
+    """First-touch attribution: only takes effect for a brand-new account
+    (no subscriptions yet) that isn't already attributed, and never to self."""
+    if tg_id == referrer_tg_id:
+        return False
+    with get_conn() as conn:
+        row = conn.execute("SELECT referred_by FROM users WHERE tg_id=?", (tg_id,)).fetchone()
+        if not row or row["referred_by"] is not None:
+            return False
+        has_sub = conn.execute("SELECT 1 FROM subscriptions WHERE tg_id=?", (tg_id,)).fetchone()
+        if has_sub:
+            return False
+        referrer = conn.execute("SELECT 1 FROM users WHERE tg_id=?", (referrer_tg_id,)).fetchone()
+        if not referrer:
+            return False
+        conn.execute("UPDATE users SET referred_by=? WHERE tg_id=?", (referrer_tg_id, tg_id))
+        return True
+
+
+def _apply_bonus_days(conn, tg_id: int, days: int):
+    if days <= 0:
+        return
+    row = conn.execute(
+        "SELECT uuid, expires_at FROM subscriptions WHERE tg_id=? AND active=1 AND held_at IS NULL "
+        "ORDER BY expires_at DESC LIMIT 1",
+        (tg_id,),
+    ).fetchone()
+    if row:
+        new_expires = datetime.datetime.fromisoformat(row["expires_at"]) + datetime.timedelta(days=days)
+        conn.execute("UPDATE subscriptions SET expires_at=? WHERE uuid=?", (new_expires.isoformat(), row["uuid"]))
+    else:
+        conn.execute(
+            "UPDATE users SET bonus_days_pending = COALESCE(bonus_days_pending, 0) + ? WHERE tg_id=?",
+            (days, tg_id),
+        )
+
+
+def credit_bonus_days(tg_id: int, days: int):
+    with get_conn() as conn:
+        _apply_bonus_days(conn, tg_id, days)
+
+
+def referral_stats(tg_id: int) -> dict:
+    with get_conn() as conn:
+        user = conn.execute("SELECT ref_code, bonus_days_pending FROM users WHERE tg_id=?", (tg_id,)).fetchone()
+        count = conn.execute(
+            "SELECT COUNT(*) c FROM users WHERE referred_by=? AND referral_rewarded=1", (tg_id,)
+        ).fetchone()["c"]
+        return {
+            "ref_code": user["ref_code"] if user else None,
+            "bonus_days_pending": user["bonus_days_pending"] if user else 0,
+            "referred_count": count,
+        }
 
 
 def get_user_by_token(token: str):
@@ -377,17 +457,32 @@ def get_user_by_token(token: str):
 
 def create_subscription(tg_id: int, node: str, plan_days: int, plan_code: str, source: str = "bot", client_uuid: str | None = None):
     import uuid as uuidlib
+    import config
 
     cid = client_uuid or str(uuidlib.uuid4())
     created = datetime.datetime.utcnow()
     expires = created + datetime.timedelta(days=plan_days)
     with get_conn() as conn:
+        is_first = conn.execute("SELECT 1 FROM subscriptions WHERE tg_id=?", (tg_id,)).fetchone() is None
+        urow = conn.execute(
+            "SELECT referred_by, referral_rewarded, bonus_days_pending FROM users WHERE tg_id=?", (tg_id,)
+        ).fetchone()
+        pending = urow["bonus_days_pending"] if urow else 0
+        if pending:
+            expires += datetime.timedelta(days=pending)
+            conn.execute("UPDATE users SET bonus_days_pending=0 WHERE tg_id=?", (tg_id,))
         conn.execute(
             "INSERT INTO subscriptions (uuid, tg_id, node, plan, created_at, expires_at, active, source) "
             "VALUES (?,?,?,?,?,?,1,?)",
             (cid, tg_id, node, plan_code, created.isoformat(), expires.isoformat(), source),
         )
-    return {"uuid": cid, "tg_id": tg_id, "node": node, "plan": plan_code, "expires_at": expires.isoformat()}
+        if is_first and urow and urow["referred_by"] and not urow["referral_rewarded"] and config.REFERRAL_ENABLED:
+            conn.execute("UPDATE users SET referral_rewarded=1 WHERE tg_id=?", (tg_id,))
+            bonus = config.REFERRAL_BONUS_DAYS
+            _apply_bonus_days(conn, tg_id, bonus)
+            _apply_bonus_days(conn, urow["referred_by"], bonus)
+        expires_final = conn.execute("SELECT expires_at FROM subscriptions WHERE uuid=?", (cid,)).fetchone()["expires_at"]
+    return {"uuid": cid, "tg_id": tg_id, "node": node, "plan": plan_code, "expires_at": expires_final}
 
 
 def list_active_subscriptions(tg_id: int | None = None, node: str | None = None):
