@@ -1,8 +1,8 @@
 # MBS Panel
 
-[![CI](https://github.com/devsavsis/mbs-panel/actions/workflows/ci.yml/badge.svg)](https://github.com/devsavsis/mbs-panel/actions/workflows/ci.yml)
+[![CI](https://github.com/savsisbtw/mbs-panel/actions/workflows/ci.yml/badge.svg)](https://github.com/savsisbtw/mbs-panel/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/devsavsis/mbs-panel?include_prereleases)](https://github.com/devsavsis/mbs-panel/releases)
+[![Release](https://img.shields.io/github/v/release/savsisbtw/mbs-panel?include_prereleases)](https://github.com/savsisbtw/mbs-panel/releases)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![Xray-core](https://img.shields.io/badge/xray--core-latest-red)](https://github.com/XTLS/Xray-core)
 
@@ -115,7 +115,7 @@ sequenceDiagram
 bash <(curl -Ls https://mbs.savsis.xyz/install.sh)
 ```
 
-(или напрямую с GitHub, если так удобнее: `git clone https://github.com/devsavsis/mbs-panel.git && cd mbs-panel && sudo bash install.sh` — скрипт один и тот же, `mbs.savsis.xyz` просто зеркало с автосинком)
+(или напрямую с GitHub, если так удобнее: `git clone https://github.com/savsisbtw/mbs-panel.git && cd mbs-panel && sudo bash install.sh` — скрипт один и тот же, `mbs.savsis.xyz` просто зеркало с автосинком)
 
 Скрипт спросит домен панели, домен подписки, токен бота от [@BotFather](https://t.me/BotFather) и список Telegram ID админов — и дальше всё сам: ставит зависимости, Xray, nginx, выпускает сертификаты Let's Encrypt, генерирует Reality-ключи, поднимает systemd-сервисы, настраивает firewall (ufw) и fail2ban. В конце покажет пароль от админки и ссылку на панель.
 
@@ -243,7 +243,7 @@ sequenceDiagram
 PR и issues welcome. CI на каждый пуш гоняет compile-check по питону, синтаксис-проверку шелл-скриптов и smoke-тест генерации install-скрипта ноды.
 
 ## Авторы:
-github.com/devsavsis
+github.com/savsisbtw
 github.com/welfizx
 
 ## Лицензия

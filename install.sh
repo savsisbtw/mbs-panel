@@ -3,7 +3,7 @@ set -e
 set -o pipefail
 
 MIRROR_URL="https://api.savsis.xyz/git/mbs-panel.git/"
-REPO_URL="https://github.com/devsavsis/mbs-panel.git"
+REPO_URL="https://github.com/savsisbtw/mbs-panel.git"
 APP_DIR="/opt/mbs-panel"
 WEBROOT="/var/www/certbot"
 
