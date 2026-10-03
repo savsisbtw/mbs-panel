@@ -61,6 +61,9 @@ jobs:
           }
           script = nodeprov.render_install_script(node)
           assert "PRIVKEY" in script
+          assert "PREFLIGHT_FAIL" in script and "443 2053 2087" in script, "node install must refuse a non-empty server before touching it"
+          assert script.index("PREFLIGHT_FAIL") < script.index("authorized_keys"), "preflight must run before the management key is added"
+          assert "OK=$((OK+1))" in script and "STATUS=failed" in script, "node must report active only after xray stays up"
           assert len(script) > 500
           print("node install script rendered OK,", len(script), "bytes")
           PYEOF

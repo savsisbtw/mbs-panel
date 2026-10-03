@@ -71,6 +71,28 @@ set -e
 echo "== MBS Panel node install =="
 export DEBIAN_FRONTEND=noninteractive
 
+PREFLIGHT_FAIL=0
+if ! {{ [ -f /usr/local/etc/xray/config.json ] && grep -q mbs-grpc /usr/local/etc/xray/config.json; }}; then
+  if [ -d /usr/local/bin/xray ]; then
+    echo "СТОП: /usr/local/bin/xray это каталог, на сервере уже стоит чужой прокси (Marzban-node и подобное)"
+    PREFLIGHT_FAIL=1
+  fi
+  if command -v docker >/dev/null 2>&1 && docker ps --format '{{{{.Names}}}}' 2>/dev/null | grep -qiE 'marzban|xray|remnawave|v2ray|hysteria'; then
+    echo "СТОП: в Docker на этом сервере уже крутится прокси"
+    PREFLIGHT_FAIL=1
+  fi
+  for p in {ports}; do
+    if ss -ltn 2>/dev/null | awk '{{print $4}}' | grep -qE "[:.]$p$"; then
+      echo "СТОП: порт $p уже занят другим процессом"
+      PREFLIGHT_FAIL=1
+    fi
+  done
+fi
+if [ "$PREFLIGHT_FAIL" = "1" ]; then
+  echo "Нужен чистый сервер. Ничего не установлено и не изменено, ключ панели не добавлен."
+  exit 1
+fi
+
 mkdir -p /root/.ssh
 chmod 700 /root/.ssh
 curl -Ls https://{panel}/mgmt-pubkey.txt >> /root/.ssh/authorized_keys
@@ -91,9 +113,19 @@ XRAYCFG
 command -v ufw >/dev/null 2>&1 && {{ ufw allow 22/tcp || true; {ufw_rules} }}
 systemctl enable xray >/dev/null 2>&1 || true
 systemctl restart xray
-sleep 1
-STATUS=$(systemctl is-active xray)
+OK=0
+for i in 1 2 3 4 5 6 7 8; do
+  sleep 1
+  if systemctl is-active --quiet xray && ss -ltn 2>/dev/null | awk '{{print $4}}' | grep -qE "[:.]{first_port}$"; then
+    OK=$((OK+1))
+  else
+    OK=0
+  fi
+  if [ "$OK" -ge 3 ]; then break; fi
+done
+if [ "$OK" -ge 3 ]; then STATUS=active; else STATUS=failed; fi
 echo "xray status: $STATUS"
+if [ "$STATUS" != "active" ]; then journalctl -u xray -n 15 --no-pager 2>/dev/null || true; fi
 
 {hysteria_block}
 MY_IP=$(curl -s https://api.ipify.org || echo unknown)
@@ -234,9 +266,11 @@ def render_install_script(node: dict) -> str:
             sni=node["sni"],
         )
 
+    ports = " ".join(str(t["port"]) for t in transports)
     return SELF_INSTALL_SCRIPT.format(
         panel=PANEL_DOMAIN, token=node["provision_token"], config_json=config_json,
         certbot_block=certbot_block, hysteria_block=hysteria_block, ufw_rules=ufw_rules,
+        ports=ports, first_port=transports[0]["port"],
     )
 
 
