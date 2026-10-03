@@ -24,6 +24,10 @@ jobs:
         run: |
           bash -n install.sh
           bash -n mbs
+          bash -n tests/test_mbs_update.sh
+
+      - name: Smoke test mbs update and mirror (manual edits on the server, url mirror, unsafe urls, rollback)
+        run: bash tests/test_mbs_update.sh
 
       - name: Smoke test install-script rendering
         env:
@@ -310,10 +314,10 @@ jobs:
           import settings
 
           db.init_db()
-          db.create_node("n1", "Node One", "managed", "1.1.1.1", 443, "pub1", "sid1", "sni1", "xtls-rprx-vision")
+          db.create_node("bk1", "Node One", "managed", "1.1.1.1", 443, "pub1", "sid1", "sni1", "xtls-rprx-vision")
 
-          sub_a = db.create_subscription(111, "n1", 30, "1m", source="bot")
-          sub_b = db.create_subscription(222, "n1", 30, "1m", source="bot")
+          sub_a = db.create_subscription(111, "bk1", 30, "1m", source="bot")
+          sub_b = db.create_subscription(222, "bk1", 30, "1m", source="bot")
 
           legal.update_env_var("BRAND_NAME", "SnapshotBrand")
           settings.set_plan_prices({"1m": 555})
@@ -333,7 +337,7 @@ jobs:
           settings.set_plan_prices({"1m": 999})
           legal.update_env_var("HWID_LIMIT_ENABLED", "false")
           assert db.resume_subscription(sub_a["uuid"])["held_at"] is None
-          sub_c = db.create_subscription(333, "n1", 30, "1m", source="bot")
+          sub_c = db.create_subscription(333, "bk1", 30, "1m", source="bot")
           assert settings.get_brand_name() == "MutatedAfterBackup"
           assert len(db.list_active_subscriptions(tg_id=111)) == 1
 
@@ -383,4 +387,210 @@ jobs:
           assert "admin.html" not in root_response
 
           print("custom ADMIN_PATH: old /admin route gone, new path registered, root() no longer leaks the panel OK")
+          PYEOF
+
+      - name: Smoke test server chains (xray config generation, relay clients, subscription entries, audit log, old-db migration)
+        env:
+          BOT_TOKEN: "123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          BOT_USERNAME: "x"
+          ADMIN_IDS: "1"
+          ADMIN_PANEL_PASSWORD: "ci-test-password-not-real"
+          PANEL_DOMAIN: "panel.test"
+          SUB_DOMAIN: "sub.test"
+          SITE_DOMAIN: "test"
+          XRAY_PUBLIC_KEY: "x"
+          XRAY_SHORT_ID_TCP: "x"
+          XRAY_SHORT_ID_GRPC: "x"
+          XRAY_SHORT_ID_XHTTP: "x"
+        run: |
+          python - << 'PYEOF'
+          import base64
+          import json
+          import urllib.parse
+
+          import chains
+          import db
+          import links
+          import nodeprov
+          import xray_manager
+
+          transports = nodeprov.build_transports("a.example.com", 443, "www.microsoft.com", "PUBA", include_ws=False)
+          entry_cfg = json.loads(nodeprov._build_config_json(transports, "PRIVA", "a.example.com"))
+          exit_cfg = json.loads(nodeprov._build_config_json(
+              nodeprov.build_transports("b.example.com", 443, "www.microsoft.com", "PUBB"), "PRIVB", "b.example.com"))
+
+          wanted = {"uuid-1": "uuid-1", "uuid-2": "uuid-2"}
+          chain = {"code": "cabc12", "port": 10443, "short_id": "1234567890abcdef", "exit_node": "chb", "relay_uuid": "relay-uuid-1"}
+          exit_nodes = {"chb": {
+              "address": "b.example.com", "port": 443, "sni": "www.microsoft.com",
+              "public_key": "PUBB", "short_id": "ffff", "kind": "managed", "shared_uuid": None,
+          }}
+
+          base_before = json.dumps([ib for ib in entry_cfg["inbounds"] if ib["tag"] in chains.BASE_TAGS], sort_keys=True)
+
+          changed, problems = chains.sync_config(entry_cfg, wanted, {}, [chain], exit_nodes)
+          assert changed and not problems, problems
+          tags = [ib["tag"] for ib in entry_cfg["inbounds"]]
+          assert "chain-cabc12" in tags, tags
+          ci = chains.find_inbound(entry_cfg, "chain-cabc12")
+          assert ci["port"] == 10443
+          assert ci["streamSettings"]["realitySettings"]["shortIds"] == ["1234567890abcdef"]
+          assert ci["streamSettings"]["realitySettings"]["privateKey"] == "PRIVA"
+          assert [c["id"] for c in ci["settings"]["clients"]] == ["uuid-1", "uuid-2"]
+          assert all(c["flow"] == "xtls-rprx-vision" for c in ci["settings"]["clients"])
+          out = [o for o in entry_cfg["outbounds"] if o["tag"] == "chain-cabc12-out"]
+          assert len(out) == 1
+          vn = out[0]["settings"]["vnext"][0]
+          assert vn["address"] == "b.example.com" and vn["port"] == 443 and vn["users"][0]["id"] == "relay-uuid-1"
+          assert out[0]["streamSettings"]["realitySettings"]["publicKey"] == "PUBB"
+          rules = [r for r in entry_cfg["routing"]["rules"] if r.get("outboundTag") == "chain-cabc12-out"]
+          assert len(rules) == 1 and rules[0]["inboundTag"] == ["chain-cabc12"]
+          assert entry_cfg["routing"]["rules"][0]["outboundTag"] == "api"
+          assert entry_cfg["outbounds"][0]["tag"] == "direct", "default outbound must stay first"
+          print("entry config: chain inbound/outbound/rule built OK")
+
+          changed2, problems2 = chains.sync_config(entry_cfg, wanted, {}, [chain], exit_nodes)
+          assert not changed2 and not problems2, "second pass must be a no-op"
+          print("idempotent OK")
+
+          wanted3 = {"uuid-2": "uuid-2", "uuid-3": "uuid-3"}
+          changed3, _ = chains.sync_config(entry_cfg, wanted3, {}, [chain], exit_nodes)
+          assert changed3
+          ci = chains.find_inbound(entry_cfg, "chain-cabc12")
+          assert [c["id"] for c in ci["settings"]["clients"]] == ["uuid-2", "uuid-3"]
+          for tag in ("vless-tcp-reality", "vless-grpc-reality", "vless-xhttp-reality"):
+              assert [c["id"] for c in chains.find_inbound(entry_cfg, tag)["settings"]["clients"]] == ["uuid-2", "uuid-3"]
+          print("clients follow the active set on every inbound incl. chain OK")
+
+          changed4, _ = chains.sync_config(entry_cfg, {"uuid-9": "uuid-9"}, {}, [], exit_nodes, apply_chains=False)
+          assert changed4
+          assert chains.find_inbound(entry_cfg, "chain-cabc12") is not None, "apply_chains=False must not drop chains"
+          assert [c["id"] for c in chains.find_inbound(entry_cfg, "chain-cabc12")["settings"]["clients"]] == ["uuid-9"]
+          print("clients-only fallback keeps existing chains and still syncs their clients OK")
+
+          chains.sync_config(entry_cfg, wanted, {}, [], exit_nodes)
+          assert chains.find_inbound(entry_cfg, "chain-cabc12") is None
+          assert not [o for o in entry_cfg["outbounds"] if o["tag"].startswith("chain-")]
+          assert not [r for r in entry_cfg["routing"]["rules"] if str(r.get("outboundTag", "")).startswith("chain-")]
+          base_after = json.dumps([ib for ib in entry_cfg["inbounds"] if ib["tag"] in chains.BASE_TAGS], sort_keys=True)
+          assert json.loads(base_after) != [] and len(json.loads(base_after)) == len(json.loads(base_before))
+          print("removing the chain cleans inbound/outbound/rule OK")
+
+          changed5, p5 = chains.sync_config(exit_cfg, wanted, {"relay-uuid-1": "relay-cabc12"}, [], {})
+          assert changed5 and not p5
+          tcp_ids = [c["id"] for c in chains.find_inbound(exit_cfg, "vless-tcp-reality")["settings"]["clients"]]
+          grpc_ids = [c["id"] for c in chains.find_inbound(exit_cfg, "vless-grpc-reality")["settings"]["clients"]]
+          assert "relay-uuid-1" in tcp_ids and "relay-uuid-1" not in grpc_ids
+          relay_entry = [c for c in chains.find_inbound(exit_cfg, "vless-tcp-reality")["settings"]["clients"] if c["id"] == "relay-uuid-1"][0]
+          assert relay_entry["flow"] == "xtls-rprx-vision" and relay_entry["email"] == "relay-cabc12"
+          changed6, _ = chains.sync_config(exit_cfg, wanted, {"relay-uuid-1": "relay-cabc12"}, [], {})
+          assert not changed6
+          print("exit node keeps the relay client only on the TCP inbound and survives sync OK")
+
+          busy_cfg = json.loads(nodeprov._build_config_json(transports, "PRIVA", "a.example.com"))
+          usable, skipped = chains.split_busy_chains(busy_cfg, [chain], {10443})
+          assert usable == [] and len(skipped) == 1
+          usable2, skipped2 = chains.split_busy_chains(busy_cfg, [chain], set())
+          assert usable2 == [chain] and skipped2 == []
+          chains.sync_config(busy_cfg, wanted, {}, [chain], exit_nodes)
+          usable3, skipped3 = chains.split_busy_chains(busy_cfg, [chain], {10443})
+          assert usable3 == [chain], "an already-applied chain is not a new port, busy check must ignore it"
+          print("busy port handling OK")
+
+          ext_nodes = {"chb": dict(exit_nodes["chb"], kind="external", shared_uuid="shared-1")}
+          ext_chain = dict(chain, relay_uuid=None)
+          cfg_e = json.loads(nodeprov._build_config_json(transports, "PRIVA", "a.example.com"))
+          ch, pr = chains.sync_config(cfg_e, wanted, {}, [ext_chain], ext_nodes)
+          assert ch and not pr
+          assert [o for o in cfg_e["outbounds"] if o["tag"] == "chain-cabc12-out"][0]["settings"]["vnext"][0]["users"][0]["id"] == "shared-1"
+          no_key = dict(ext_nodes["chb"], shared_uuid=None)
+          cfg_f = json.loads(nodeprov._build_config_json(transports, "PRIVA", "a.example.com"))
+          ch, pr = chains.sync_config(cfg_f, wanted, {}, [ext_chain], {"chb": no_key})
+          assert pr and chains.find_inbound(cfg_f, "chain-cabc12") is None
+          print("external exit uses shared uuid, missing key is reported OK")
+
+          assert chains.latency_level(10) == "low" and chains.latency_level(80) == "medium" and chains.latency_level(300) == "high"
+          assert chains.latency_level(None) == "unknown"
+          assert chains.median_ms([-1, -1]) is None and chains.median_ms([30, 10, -1]) == 30
+          print("latency helpers OK")
+
+          db.init_db()
+          db.create_node("cha", "🇫🇮 Финляндия", "managed", "fi.example.com", 443, "PUBFI", "sidfi", "www.microsoft.com", "xtls-rprx-vision")
+          db.create_node("chb", "🇳🇱 Нидерланды", "managed", "nl.example.com", 443, "PUBNL", "sidnl", "www.microsoft.com", "xtls-rprx-vision")
+          db.create_node("chx", "Внешняя", "external", "ex.example.com", 443, "PUBEX", "sidex", "www.microsoft.com", "xtls-rprx-vision", shared_uuid="shared-ex")
+
+          c1 = db.create_chain("Финка → Голландия", "cha", "chb", "relay-1")
+          assert c1["port"] == 10443 and len(c1["short_id"]) == 16 and c1["code"].startswith("c")
+          c2 = db.create_chain("Финка → Внешняя", "cha", "chx", None)
+          assert c2["port"] == 10444
+          try:
+              db.create_chain("dup", "cha", "chb", "x")
+              assert False
+          except ValueError:
+              pass
+          try:
+              db.delete_node("chb")
+              assert False, "node used in chain must not be deletable"
+          except ValueError as e:
+              assert "chain" in str(e)
+          assert [c["code"] for c in db.list_chains()] == [c1["code"], c2["code"]]
+          assert len(db.list_chains(enabled_only=True)) == 2
+          db.update_chain(c2["code"], enabled=0)
+          assert len(db.list_chains(enabled_only=True)) == 1
+          assert db.stats()["chains"] == 1
+          print("db chains CRUD, port allocation, node-delete guard OK")
+
+          sub = db.create_subscription(500, "cha", 30, "1m", source="bot")
+          text = base64.b64decode(links.build_subscription_text([sub])).decode()
+          lines = text.split("\n")
+          chain_lines = [l for l in lines if ":10443?" in l]
+          assert len(chain_lines) == 1, lines
+          assert "10444" not in text, "disabled chain must not leak into the subscription"
+          parsed = urllib.parse.urlparse(chain_lines[0])
+          assert parsed.hostname == "fi.example.com" and parsed.port == 10443
+          qs = urllib.parse.parse_qs(parsed.query)
+          assert qs["sid"] == [c1["short_id"]] and qs["pbk"] == ["PUBFI"] and qs["flow"] == ["xtls-rprx-vision"]
+          assert urllib.parse.unquote(parsed.fragment) == "🇫🇮 Финляндия → 🇳🇱 Нидерланды"
+          assert parsed.username == sub["uuid"]
+          print("subscription text carries the chain entry for the entry node's subscribers OK")
+
+          other = db.create_subscription(501, "chb", 30, "1m", source="bot")
+          text2 = base64.b64decode(links.build_subscription_text([other])).decode()
+          assert ":10443?" not in text2, "subscribers of the exit node must not get the entry node's chain"
+          print("chain is only offered to entry-node subscribers OK")
+
+          db.update_node("cha", enabled=0)
+          text3 = base64.b64decode(links.build_subscription_text([sub])).decode()
+          assert text3.strip() == ""
+          db.update_node("cha", enabled=1)
+
+          db.update_chain(c2["code"], enabled=1)
+          node_n1 = db.get_node("cha")
+          w, relay, entry_chains, exit_n = xray_manager.desired_state(node_n1)
+          assert sub["uuid"] in w and [c["code"] for c in entry_chains] == [c1["code"], c2["code"]] and relay == {}
+          node_n2 = db.get_node("chb")
+          w2, relay2, entry2, exit2 = xray_manager.desired_state(node_n2)
+          assert relay2 == {"relay-1": chains.relay_email(c1["code"])} and entry2 == []
+          node_ex = db.get_node("chx")
+          w3, relay3, entry3, exit3 = xray_manager.desired_state(node_ex)
+          assert relay3 == {}
+          db.update_node("chb", enabled=0)
+          w4, relay4, entry4, exit4 = xray_manager.desired_state(node_n1)
+          assert [c["code"] for c in entry4] == [c2["code"]], "chain whose exit is disabled must drop out"
+          print("desired_state: entry/relay/disabled-node logic OK")
+
+          db.add_audit("admin", "node.add", "/admin/api/nodes", "1.2.3.4")
+          db.add_audit(None, "login.failed", "", "5.6.7.8")
+          rows = db.list_audit(10)
+          assert rows[0]["action"] == "login.failed" and rows[1]["admin"] == "admin"
+          print("audit log OK")
+
+          with db.get_conn() as conn:
+              conn.execute("DROP TABLE chains")
+              conn.execute("DROP TABLE audit_log")
+          db.init_db()
+          assert db.list_chains() == [] and db.list_audit() == []
+          print("init_db recreates chain/audit tables on an old database OK")
+
+          print("chains: all smoke tests passed")
           PYEOF
