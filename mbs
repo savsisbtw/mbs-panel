@@ -13,7 +13,10 @@ mbs — управление MBS Panel
   mbs restart               перезапустить всё (bot, api, xray, reload nginx)
   mbs logs [bot|api|xray]   последние строки лога (по умолчанию api)
   mbs domain                показать текущий домен панели
-  mbs update                обновить код (зеркало api.savsis.xyz, потом GitHub) и перезапустить (не трогает .env и базу)
+  mbs backup                полная копия панели (база, .env, ручные правки, конфиг Xray) в /root/mbs-backups
+  mbs update [ссылка]       обновить код и перезапустить (не трогает .env и базу, перед этим сам делает копию). Без ссылки: своё зеркало -> api.savsis.xyz -> GitHub.
+                            Со ссылкой на git-репозиторий (зеркало) — берёт обновление оттуда, один раз
+  mbs mirror [ссылка|off]   показать / запомнить / убрать своё зеркало, которое mbs update проверяет первым
 EOF
 }
 
@@ -55,34 +58,172 @@ cmd_domain() {
   grep "^PANEL_DOMAIN=" "$ENV_FILE"
 }
 
-cmd_update() {
-  cd "$APP_DIR"
-  echo "проверяю обновления..."
-  local remote="origin"
-  if ! git fetch --quiet origin main 2>/dev/null; then
-    if git remote | grep -q '^github$'; then
-      echo "зеркало недоступно, пробую github..."
-      if ! git fetch --quiet github main 2>/dev/null; then
-        echo "не удалось получить обновления ни с зеркала, ни с github"
+MIRROR_FILE="$APP_DIR/.update_mirror"
+BACKUP_DIR="${MBS_BACKUP_DIR:-/root/mbs-backups}"
+XRAY_CONFIG="/usr/local/etc/xray/config.json"
+BACKUP_FILE=""
+UPDATE_STASHED=0
+
+snapshot_backup() {
+  local stamp dbsnap file
+  local -a targs=(--exclude=venv --exclude=__pycache__)
+  stamp=$(date +%Y%m%d-%H%M%S)
+  file="$BACKUP_DIR/mbs-$1-$stamp.tar.gz"
+  dbsnap="$APP_DIR/.mbs.db.snapshot"
+  mkdir -p "$BACKUP_DIR" || return 1
+  chmod 700 "$BACKUP_DIR"
+  rm -f "$dbsnap"
+  if [ -f "$APP_DIR/mbs.db" ] && [ -x "$APP_DIR/venv/bin/python" ] && \
+     "$APP_DIR/venv/bin/python" -c "import sqlite3,sys; s=sqlite3.connect(sys.argv[1]); d=sqlite3.connect(sys.argv[2]); s.backup(d); d.close(); s.close()" "$APP_DIR/mbs.db" "$dbsnap" 2>/dev/null; then
+    targs+=(--exclude=mbs.db --exclude=mbs.db-wal --exclude=mbs.db-shm "--transform=s#\.mbs\.db\.snapshot#mbs.db#")
+  fi
+  if [ -f "$XRAY_CONFIG" ]; then
+    tar czf "$file" "${targs[@]}" "$APP_DIR" "$XRAY_CONFIG" 2>/dev/null
+  else
+    tar czf "$file" "${targs[@]}" "$APP_DIR" 2>/dev/null
+  fi
+  local rc=$?
+  rm -f "$dbsnap"
+  if [ $rc -ne 0 ] || [ ! -s "$file" ]; then
+    rm -f "$file"
+    return 1
+  fi
+  chmod 600 "$file"
+  ls -1t "$BACKUP_DIR"/mbs-*.tar.gz 2>/dev/null | tail -n +6 | while read -r old; do rm -f "$old"; done
+  BACKUP_FILE="$file"
+  return 0
+}
+
+cmd_backup() {
+  if snapshot_backup manual; then
+    echo "копия сохранена: $BACKUP_FILE"
+    echo "внутри: база (консистентный снапшот), .env, код с твоими правками, конфиг Xray. Хранится 5 последних."
+  else
+    echo "не удалось сделать копию в $BACKUP_DIR (место на диске?)"
+    return 1
+  fi
+}
+
+valid_url() {
+  case "$1" in
+    https://*|http://*|ssh://*|git@*:*) ;;
+    *) return 1 ;;
+  esac
+  case "$1" in
+    *[[:space:]]*) return 1 ;;
+  esac
+  return 0
+}
+
+fetch_url() {
+  git -c protocol.ext.allow=never fetch --quiet -- "$1" main 2>/dev/null
+}
+
+restore_stash() {
+  if [ "$UPDATE_STASHED" = "1" ]; then
+    UPDATE_STASHED=0
+    if git stash pop --quiet 2>/dev/null; then
+      echo "ручные правки вернул на место"
+    else
+      echo "ручные правки остались в git stash (git stash list)"
+    fi
+  fi
+}
+
+cmd_mirror() {
+  local url="$1"
+  case "$url" in
+    "")
+      if [ -f "$MIRROR_FILE" ]; then
+        echo "своё зеркало для обновлений: $(head -n 1 "$MIRROR_FILE")"
+      else
+        echo "своё зеркало не задано — mbs update берёт api.savsis.xyz, потом GitHub"
+      fi
+      ;;
+    off|clear)
+      rm -f "$MIRROR_FILE"
+      echo "своё зеркало убрано"
+      ;;
+    *)
+      if ! valid_url "$url"; then
+        echo "это не похоже на ссылку на git-репозиторий (нужна https://..., ssh://... или git@хост:путь)"
         return 1
       fi
-      remote="github"
+      printf '%s\n' "$url" > "$MIRROR_FILE"
+      echo "зеркало запомнил: $url — mbs update теперь проверяет его первым"
+      ;;
+  esac
+}
+
+cmd_update() {
+  local arg_url="$1" target="" saved="" before="" stamp="" patch=""
+  cd "$APP_DIR"
+  echo "проверяю обновления..."
+  if [ -n "$arg_url" ]; then
+    if ! valid_url "$arg_url"; then
+      echo "это не похоже на ссылку на git-репозиторий (нужна https://..., ssh://... или git@хост:путь)"
+      return 1
+    fi
+    if ! fetch_url "$arg_url"; then
+      echo "не удалось получить обновления по ссылке: $arg_url"
+      return 1
+    fi
+    target=$(git rev-parse FETCH_HEAD)
+    echo "источник: $arg_url"
+  else
+    if [ -f "$MIRROR_FILE" ]; then
+      saved=$(head -n 1 "$MIRROR_FILE" | tr -d '[:space:]')
+    fi
+    if [ -n "$saved" ] && valid_url "$saved" && fetch_url "$saved"; then
+      target=$(git rev-parse FETCH_HEAD)
+      echo "источник: своё зеркало $saved"
+    elif git fetch --quiet origin main 2>/dev/null; then
+      target=$(git rev-parse origin/main)
+    elif git remote | grep -q '^github$' && git fetch --quiet github main 2>/dev/null; then
+      echo "зеркало недоступно, взял с github..."
+      target=$(git rev-parse github/main)
     else
-      echo "не удалось получить обновления"
+      echo "не удалось получить обновления ни с зеркала, ни с github"
       return 1
     fi
   fi
-  local before after
   before=$(git rev-parse HEAD)
-  after=$(git rev-parse "$remote/main")
-  if [ "$before" = "$after" ]; then
+  if [ "$before" = "$target" ]; then
     echo "уже последняя версия ($before)."
     return 0
   fi
+  if git merge-base --is-ancestor "$target" "$before" 2>/dev/null; then
+    echo "на сервере версия новее, чем в источнике ($before) — ничего не делаю."
+    return 0
+  fi
   echo "текущая: $before"
-  echo "новая:   $after"
-  if ! git merge --ff-only "$remote/main" --quiet; then
-    echo "не вышло быстро обновиться (похоже, файлы правились вручную на сервере) — разберись руками: git status"
+  echo "новая:   $target"
+
+  if ! snapshot_backup before-update; then
+    echo "не вышло сделать резервную копию в $BACKUP_DIR — обновление не начинаю, чтобы ничего не потерять (место на диске?)"
+    return 1
+  fi
+  echo "резервная копия перед обновлением: $BACKUP_FILE"
+
+  if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+    stamp=$(date +%Y%m%d-%H%M%S)
+    mkdir -p "$APP_DIR/local-changes"
+    patch="$APP_DIR/local-changes/local-changes-$stamp.patch"
+    git diff HEAD > "$patch"
+    if GIT_AUTHOR_NAME=mbs GIT_AUTHOR_EMAIL=mbs@localhost GIT_COMMITTER_NAME=mbs GIT_COMMITTER_EMAIL=mbs@localhost git stash push --quiet -m "mbs-update-$stamp"; then
+      UPDATE_STASHED=1
+      echo "на сервере были ручные правки — убрал в сторону, ничего не потеряно:"
+      echo "  патч:  $patch"
+      echo "  stash: git stash list (вернуть обратно: git stash pop)"
+    else
+      echo "не вышло спрятать ручные правки, остановился — разберись руками: git status"
+      return 1
+    fi
+  fi
+
+  if ! git merge --ff-only "$target" --quiet 2>/dev/null; then
+    echo "не вышло быстро обновиться (на сервере есть свои коммиты, которых нет в источнике) — разберись руками: git log"
+    restore_stash
     return 1
   fi
   echo "обновляю зависимости..."
@@ -92,6 +233,7 @@ cmd_update() {
     echo "новый код не проходит проверку, откатываюсь на $before..."
     git reset --hard "$before" --quiet
     venv/bin/pip install --quiet -r requirements.txt
+    restore_stash
     return 1
   fi
   echo "обновляю сам CLI..."
@@ -115,22 +257,36 @@ cmd_update() {
   sleep 2
   if systemctl is-active --quiet mbs-bot && systemctl is-active --quiet mbs-api; then
     echo "обновлено: $before -> $(git rev-parse --short HEAD)"
+    if [ "$UPDATE_STASHED" = "1" ]; then
+      echo "твои ручные правки лежат в git stash и в $patch — если они нужны, посмотри git stash show -p"
+    fi
+    echo "если что-то пошло не так: копия $BACKUP_FILE (распаковать: tar xzf файл -C /)"
+    if [ -n "$arg_url" ]; then
+      echo "чтобы всегда обновляться с этого зеркала: mbs mirror $arg_url"
+    fi
   else
     echo "сервисы не поднялись после обновления, откатываюсь на $before..."
     git reset --hard "$before" --quiet
     venv/bin/pip install --quiet -r requirements.txt
     systemctl restart mbs-bot mbs-api
+    restore_stash
     echo "откачено обратно на $before"
     return 1
   fi
 }
 
+main() {
 case "$1" in
   pass) cmd_pass "$2" ;;
   status) cmd_status ;;
   restart) cmd_restart ;;
   logs) cmd_logs "$2" ;;
   domain) cmd_domain ;;
-  update) cmd_update ;;
+  update) cmd_update "$2" ;;
+  mirror) cmd_mirror "$2" ;;
+  backup) cmd_backup ;;
   *) usage ;;
 esac
+}
+
+main "$@"; exit $?
