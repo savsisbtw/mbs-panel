@@ -1,14 +1,15 @@
 import json
 import os
+import socket
 import subprocess
 import fcntl
 import contextlib
+import time
 
-from config import XRAY_CONFIG_PATH, DE1_TRANSPORTS
+import chains
+from config import XRAY_CONFIG_PATH
 
 _LOCK_PATH = XRAY_CONFIG_PATH + ".lock"
-_LOCAL_TAGS = {t["tag"] for t in DE1_TRANSPORTS}
-_TAG_FLOW = {t["tag"]: t.get("flow") for t in DE1_TRANSPORTS}
 
 
 @contextlib.contextmanager
@@ -101,7 +102,7 @@ def _reload_xray():
 
 
 def _local_inbounds(cfg):
-    return [ib for ib in cfg["inbounds"] if ib.get("tag") in _LOCAL_TAGS]
+    return [ib for ib in cfg["inbounds"] if chains.is_user_tag(ib.get("tag"))]
 
 
 def add_client(client_uuid: str, email: str):
@@ -113,7 +114,7 @@ def add_client(client_uuid: str, email: str):
             if any(c["id"] == client_uuid for c in clients):
                 continue
             entry = {"id": client_uuid, "email": email}
-            flow = _TAG_FLOW.get(ib["tag"])
+            flow = chains.flow_for_tag(ib["tag"])
             if flow:
                 entry["flow"] = flow
             clients.append(entry)
@@ -138,38 +139,138 @@ def remove_client(client_uuid: str):
             _reload_xray()
 
 
+def _node_usable(node):
+    return bool(node["enabled"]) and node["status"] == "active"
+
+
+def desired_state(node):
+    import db as dbmod
+
+    active = dbmod.list_active_subscriptions(node=node["code"])
+    wanted = {s["uuid"]: s["uuid"] for s in active}
+    nodes_by_code = {n["code"]: n for n in dbmod.list_nodes()}
+    entry_chains = []
+    exit_nodes = {}
+    relay_wanted = {}
+    for chain in dbmod.list_chains(enabled_only=True):
+        entry = nodes_by_code.get(chain["entry_node"])
+        exit_node = nodes_by_code.get(chain["exit_node"])
+        if not entry or not exit_node:
+            continue
+        if not _node_usable(entry) or not _node_usable(exit_node):
+            continue
+        if chain["entry_node"] == node["code"]:
+            entry_chains.append(chain)
+            exit_nodes[chain["exit_node"]] = exit_node
+        if chain["exit_node"] == node["code"] and node["kind"] in ("local", "managed") and chain.get("relay_uuid"):
+            relay_wanted[chain["relay_uuid"]] = chains.relay_email(chain["code"])
+    return wanted, relay_wanted, entry_chains, exit_nodes
+
+
+def _read_config_text():
+    with open(XRAY_CONFIG_PATH, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def _restore_config_text(text):
+    tmp = XRAY_CONFIG_PATH + ".restore.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, XRAY_CONFIG_PATH)
+    subprocess.run(["systemctl", "restart", "xray"], timeout=20)
+
+
+def _reload_and_verify():
+    subprocess.run(["systemctl", "restart", "xray"], check=True, timeout=20)
+    time.sleep(1)
+    state = subprocess.run(["systemctl", "is-active", "xray"], capture_output=True, text=True).stdout.strip()
+    if state != "active":
+        raise ConfigValidationError("xray не поднялся после применения конфига, вернули старый")
+
+
+def _port_busy(port):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("0.0.0.0", int(port)))
+        return False
+    except OSError:
+        return True
+    finally:
+        sock.close()
+
+
+def _open_firewall(port):
+    subprocess.run(
+        ["sh", "-c", f"command -v ufw >/dev/null 2>&1 && ufw allow {int(port)}/tcp || true"],
+        timeout=20,
+    )
+
+
+def _reconcile_local(wanted, relay_wanted, entry_chains, exit_nodes, apply_chains=True):
+    with _locked():
+        before_text = _read_config_text()
+        cfg = json.loads(before_text)
+        usable = entry_chains
+        skipped = []
+        new_ports = []
+        if apply_chains:
+            busy = {c["port"] for c in entry_chains if _port_busy(c["port"])}
+            usable, skipped = chains.split_busy_chains(cfg, entry_chains, busy)
+            new_ports = chains.new_ports_needed(cfg, usable)
+        changed, problems = chains.sync_config(cfg, wanted, relay_wanted, usable, exit_nodes, apply_chains=apply_chains)
+        if changed:
+            _save(cfg)
+            try:
+                _reload_and_verify()
+            except Exception:
+                _restore_config_text(before_text)
+                raise
+            for port in new_ports:
+                _open_firewall(port)
+    return {"changed": changed, "new_ports": new_ports, "problems": skipped + problems}
+
+
+def sync_node(node):
+    wanted, relay_wanted, entry_chains, exit_nodes = desired_state(node)
+    if node["kind"] == "managed":
+        import nodeprov
+        reconcile = nodeprov.remote_reconcile
+        args = (node, wanted, relay_wanted, entry_chains, exit_nodes)
+    elif node["kind"] == "local":
+        reconcile = _reconcile_local
+        args = (wanted, relay_wanted, entry_chains, exit_nodes)
+    else:
+        return {"changed": False, "new_ports": [], "problems": []}
+    try:
+        return reconcile(*args)
+    except Exception as first_error:
+        if not entry_chains:
+            raise
+        result = reconcile(*args, apply_chains=False)
+        result["problems"].append(f"цепочки не применились, клиенты синхронизированы: {first_error}")
+        return result
+
+
 def sync_from_db():
     import db as dbmod
 
     expired = dbmod.deactivate_expired()
-    active = dbmod.list_active_subscriptions(node="de1")
-    active_by_id = {s["uuid"]: s for s in active}
+    node = dbmod.get_node("de1")
+    result = sync_node(node)
+    wanted = desired_state(node)[0]
+    return {
+        "removed_expired": len(expired), "active_now": len(wanted),
+        "reloaded": result["changed"], "problems": result["problems"],
+    }
 
-    with _locked():
-        cfg = _load()
-        changed = False
-        for ib in _local_inbounds(cfg):
-            clients = ib["settings"]["clients"]
-            current_ids = {c["id"] for c in clients}
-            if current_ids == set(active_by_id.keys()):
-                continue
-            new_clients = [c for c in clients if c["id"] in active_by_id]
-            existing_ids = {c["id"] for c in new_clients}
-            flow = _TAG_FLOW.get(ib["tag"])
-            for cid, sub in active_by_id.items():
-                if cid not in existing_ids:
-                    entry = {"id": cid, "email": cid}
-                    if flow:
-                        entry["flow"] = flow
-                    new_clients.append(entry)
-            ib["settings"]["clients"] = new_clients
-            changed = True
 
-        if changed:
-            _save(cfg)
-            _reload_xray()
-
-    return {"removed_expired": len(expired), "active_now": len(active_by_id), "reloaded": changed}
+def probe_from_node(node: dict, host: str, port: int):
+    if node["kind"] == "local":
+        return chains.tcp_connect_ms(host, port)
+    if node["kind"] == "managed":
+        import nodeprov
+        return nodeprov.remote_probe(node, host, port)
+    raise ValueError("нода не под управлением панели, замерить с неё нельзя")
 
 
 def add_client_to_node(node: dict, client_uuid: str, email: str):
@@ -266,7 +367,6 @@ def local_node_status() -> dict:
 
 def sync_all():
     import db as dbmod
-    import nodeprov
 
     expired = dbmod.deactivate_expired()
     results = {}
@@ -276,8 +376,15 @@ def sync_all():
         elif node["kind"] == "managed":
             active = dbmod.list_active_subscriptions(node=node["code"])
             try:
-                nodeprov.remote_sync(node, active)
-                results[node["code"]] = {"active_now": len(active), "ok": True}
+                res = sync_node(node)
+                results[node["code"]] = {
+                    "active_now": len(active), "ok": True,
+                    "changed": res["changed"], "problems": res["problems"],
+                }
             except Exception as e:
                 results[node["code"]] = {"active_now": len(active), "ok": False, "error": str(e)}
-    return {"removed_expired": len(expired), "nodes": results}
+    reloaded = any(r.get("changed") or r.get("reloaded") for r in results.values())
+    return {
+        "removed_expired": len(expired), "active_now": len(dbmod.list_active_subscriptions()),
+        "reloaded": reloaded, "nodes": results,
+    }

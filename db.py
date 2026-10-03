@@ -6,6 +6,7 @@ import secrets
 import datetime
 import contextlib
 
+import chains as chainsmod
 from config import DB_PATH
 
 SCHEMA = """
@@ -113,6 +114,31 @@ CREATE TABLE IF NOT EXISTS nodes (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS chains (
+    code TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    entry_node TEXT NOT NULL,
+    exit_node TEXT NOT NULL,
+    port INTEGER NOT NULL,
+    short_id TEXT NOT NULL,
+    relay_uuid TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    admin TEXT,
+    action TEXT NOT NULL,
+    detail TEXT,
+    ip TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_chains_pair ON chains (entry_node, exit_node);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_chains_entry_port ON chains (entry_node, port);
+CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log (ts);
 CREATE INDEX IF NOT EXISTS idx_subs_active_expires ON subscriptions (active, expires_at);
 CREATE INDEX IF NOT EXISTS idx_subs_tg_id ON subscriptions (tg_id);
 CREATE INDEX IF NOT EXISTS idx_subs_node ON subscriptions (node);
@@ -355,7 +381,85 @@ def delete_node(code: str):
         ).fetchone()["c"]
         if active:
             raise ValueError(f"node has {active} active subscriptions, revoke them first")
+        in_chains = conn.execute(
+            "SELECT COUNT(*) c FROM chains WHERE entry_node=? OR exit_node=?", (code, code)
+        ).fetchone()["c"]
+        if in_chains:
+            raise ValueError(f"node is used in {in_chains} chain(s), delete them first")
         conn.execute("DELETE FROM nodes WHERE code=?", (code,))
+
+
+def list_chains(enabled_only: bool = False):
+    q = "SELECT * FROM chains"
+    if enabled_only:
+        q += " WHERE enabled=1"
+    q += " ORDER BY sort_order ASC, created_at ASC"
+    with get_conn() as conn:
+        rows = conn.execute(q).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_chain(code: str):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM chains WHERE code=?", (code,)).fetchone()
+        return dict(row) if row else None
+
+
+def create_chain(label: str, entry_node: str, exit_node: str, relay_uuid: str | None):
+    with get_conn() as conn:
+        dup = conn.execute(
+            "SELECT 1 FROM chains WHERE entry_node=? AND exit_node=?", (entry_node, exit_node)
+        ).fetchone()
+        if dup:
+            raise ValueError("такая цепочка уже есть")
+        used = {r["port"] for r in conn.execute(
+            "SELECT port FROM chains WHERE entry_node=?", (entry_node,)
+        ).fetchall()}
+        port = None
+        for candidate in range(chainsmod.PORT_MIN, chainsmod.PORT_MAX + 1):
+            if candidate not in used:
+                port = candidate
+                break
+        if port is None:
+            raise ValueError("закончились свободные порты под цепочки на этой ноде")
+        row = conn.execute("SELECT MAX(sort_order) m FROM chains").fetchone()
+        next_order = (row["m"] or 0) + 1
+        code = "c" + secrets.token_hex(3)
+        conn.execute(
+            "INSERT INTO chains (code, label, entry_node, exit_node, port, short_id, relay_uuid, enabled, sort_order, created_at) "
+            "VALUES (?,?,?,?,?,?,?,1,?,?)",
+            (code, label, entry_node, exit_node, port, secrets.token_hex(8), relay_uuid, next_order, now_iso()),
+        )
+    return get_chain(code)
+
+
+def update_chain(code: str, **fields):
+    if not fields:
+        return get_chain(code)
+    cols = ", ".join(f"{k}=?" for k in fields)
+    with get_conn() as conn:
+        conn.execute(f"UPDATE chains SET {cols} WHERE code=?", (*fields.values(), code))
+    return get_chain(code)
+
+
+def delete_chain(code: str):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM chains WHERE code=?", (code,))
+
+
+def add_audit(admin: str | None, action: str, detail: str = "", ip: str | None = None):
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO audit_log (ts, admin, action, detail, ip) VALUES (?,?,?,?,?)",
+            (now_iso(), admin, action, detail[:500], ip),
+        )
+        conn.execute("DELETE FROM audit_log WHERE id <= (SELECT MAX(id) FROM audit_log) - 5000")
+
+
+def list_audit(limit: int = 100):
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
 
 
 def _generate_ref_code(conn) -> str:
@@ -740,6 +844,32 @@ def get_subscription(client_uuid: str):
         return dict(row) if row else None
 
 
+def list_users(q: str = "", limit: int = 200):
+    limit = max(1, min(int(limit), 1000))
+    q = (q or "").strip()
+    where = ""
+    params = [now_iso(), now_iso()]
+    if q:
+        if q.lstrip("-").isdigit():
+            where = "WHERE u.tg_id = ? OR instr(lower(COALESCE(u.username, '')), ?) > 0"
+            params += [int(q), q.lower()]
+        else:
+            where = "WHERE instr(lower(COALESCE(u.username, '')), ?) > 0"
+            params.append(q.lower().lstrip("@"))
+    params.append(limit)
+    query = (
+        "SELECT u.tg_id, u.username, u.created_at, "
+        "(SELECT COUNT(*) FROM subscriptions s WHERE s.tg_id=u.tg_id) AS subs_total, "
+        "(SELECT COUNT(*) FROM subscriptions s WHERE s.tg_id=u.tg_id AND s.active=1 AND s.held_at IS NULL AND s.expires_at > ?) AS subs_active, "
+        "(SELECT MAX(s.expires_at) FROM subscriptions s WHERE s.tg_id=u.tg_id AND s.active=1 AND s.held_at IS NULL AND s.expires_at > ?) AS active_until, "
+        "(SELECT COUNT(*) FROM devices d WHERE d.tg_id=u.tg_id) AS devices "
+        "FROM users u " + where + " ORDER BY u.created_at DESC LIMIT ?"
+    )
+    with get_conn() as conn:
+        rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+
+
 def get_user(tg_id: int):
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM users WHERE tg_id=?", (tg_id,)).fetchone()
@@ -771,12 +901,16 @@ def stats():
         total_subs = conn.execute("SELECT COUNT(*) c FROM subscriptions").fetchone()["c"]
         gifts_created = conn.execute("SELECT COUNT(*) c FROM gift_codes").fetchone()["c"]
         gifts_used = conn.execute("SELECT COUNT(*) c FROM gift_codes WHERE used_by IS NOT NULL").fetchone()["c"]
+        nodes_n = conn.execute("SELECT COUNT(*) c FROM nodes WHERE enabled=1").fetchone()["c"]
+        chains_n = conn.execute("SELECT COUNT(*) c FROM chains WHERE enabled=1").fetchone()["c"]
         return {
             "users": users_n,
             "active_subscriptions": active_n,
             "total_subscriptions": total_subs,
             "gifts_created": gifts_created,
             "gifts_used": gifts_used,
+            "nodes": nodes_n,
+            "chains": chains_n,
         }
 
 

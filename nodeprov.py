@@ -1,3 +1,6 @@
+import contextlib
+import fcntl
+import hashlib
 import json
 import secrets
 import socket
@@ -5,12 +8,12 @@ import subprocess
 
 import paramiko
 
+import chains
 from config import PANEL_DOMAIN
 
 MGMT_KEY_PATH = "/root/.ssh/mbs_nodes_ed25519"
 MGMT_KNOWN_HOSTS_PATH = "/root/.ssh/mbs_nodes_known_hosts"
-LOCAL_TAGS = {"vless-tcp-reality", "vless-grpc-reality", "vless-xhttp-reality", "vless-ws-tls"}
-TAG_FLOW = {"vless-tcp-reality": "xtls-rprx-vision"}
+REMOTE_CONFIG_PATH = "/usr/local/etc/xray/config.json"
 
 ONE_COMMAND_TEMPLATE = "bash <(curl -Ls https://{panel}/install/{token}.sh)"
 
@@ -254,26 +257,45 @@ class RemoteConfigError(Exception):
     pass
 
 
-def _remote_edit_clients(node: dict, mutate_fn):
+def _busy_ports(client) -> set:
+    _, stdout, _ = client.exec_command("ss -ltnH 2>/dev/null | awk '{print $4}'", timeout=10)
+    busy = set()
+    for line in stdout.read().decode(errors="replace").splitlines():
+        tail = line.rsplit(":", 1)[-1]
+        if tail.isdigit():
+            busy.add(int(tail))
+    return busy
+
+
+@contextlib.contextmanager
+def _node_lock(address: str):
+    key = hashlib.sha1(address.encode()).hexdigest()[:12]
+    with open(f"/tmp/mbs-node-{key}.lock", "w") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
+
+
+def _remote_edit_config(node: dict, mutate_fn):
+    with _node_lock(node["address"]):
+        return _remote_edit_config_locked(node, mutate_fn)
+
+
+def _remote_edit_config_locked(node: dict, mutate_fn):
     client = _mgmt_connect(node["address"])
     try:
         sftp = client.open_sftp()
-        with sftp.open("/usr/local/etc/xray/config.json") as f:
+        with sftp.open(REMOTE_CONFIG_PATH) as f:
             cfg = json.loads(f.read().decode())
-        changed = False
-        for ib in cfg["inbounds"]:
-            if ib.get("tag") not in LOCAL_TAGS:
-                continue
-            clients = ib["settings"]["clients"]
-            new_clients = mutate_fn(clients, ib["tag"])
-            if new_clients is not None:
-                ib["settings"]["clients"] = new_clients
-                changed = True
-        if not changed:
+        result = mutate_fn(cfg, client)
+        if not result["changed"]:
             sftp.close()
-            return
+            return result
         data = json.dumps(cfg, indent=2).encode()
-        tmp_path = "/usr/local/etc/xray/config.json.validate.tmp"
+        tmp_path = REMOTE_CONFIG_PATH + ".validate.tmp"
+        prev_path = REMOTE_CONFIG_PATH + ".mbs-prev"
         with sftp.open(tmp_path, "wb") as f:
             f.write(data)
         _, stdout, stderr = client.exec_command(f"/usr/local/bin/xray run -test -format=json -config {tmp_path}", timeout=15)
@@ -283,15 +305,35 @@ def _remote_edit_clients(node: dict, mutate_fn):
             client.exec_command(f"rm -f {tmp_path}")
             sftp.close()
             raise RemoteConfigError(f"config test failed on {node['address']}: {test_out}")
-        client.exec_command(f"mv {tmp_path} /usr/local/etc/xray/config.json")[1].channel.recv_exit_status()
+        client.exec_command(f"cp -p {REMOTE_CONFIG_PATH} {prev_path}")[1].channel.recv_exit_status()
+        client.exec_command(f"mv {tmp_path} {REMOTE_CONFIG_PATH}")[1].channel.recv_exit_status()
         sftp.close()
-        _, stdout, stderr = client.exec_command("systemctl restart xray", timeout=20)
+        _, stdout, stderr = client.exec_command("systemctl restart xray && sleep 1 && systemctl is-active xray", timeout=30)
         restart_exit = stdout.channel.recv_exit_status()
         if restart_exit != 0:
             err = stderr.read().decode(errors="replace").strip()
-            raise RemoteConfigError(f"xray restart failed on {node['address']}: {err}")
+            client.exec_command(f"cp -p {prev_path} {REMOTE_CONFIG_PATH} && systemctl restart xray")[1].channel.recv_exit_status()
+            raise RemoteConfigError(f"xray не поднялся на {node['address']}, конфиг откатили назад: {err}")
+        for port in result.get("new_ports") or []:
+            client.exec_command(f"command -v ufw >/dev/null 2>&1 && ufw allow {int(port)}/tcp || true")[1].channel.recv_exit_status()
+        return result
     finally:
         client.close()
+
+
+def _remote_edit_clients(node: dict, mutate_fn):
+    def mutate(cfg, client):
+        changed = False
+        for ib in cfg["inbounds"]:
+            tag = ib.get("tag")
+            if not chains.is_user_tag(tag):
+                continue
+            new_clients = mutate_fn(ib["settings"]["clients"], tag)
+            if new_clients is not None:
+                ib["settings"]["clients"] = new_clients
+                changed = True
+        return {"changed": changed}
+    _remote_edit_config(node, mutate)
 
 
 def remote_add_client(node: dict, client_uuid: str, email: str):
@@ -299,7 +341,7 @@ def remote_add_client(node: dict, client_uuid: str, email: str):
         if any(c["id"] == client_uuid for c in clients):
             return None
         entry = {"id": client_uuid, "email": email}
-        flow = TAG_FLOW.get(tag)
+        flow = chains.flow_for_tag(tag)
         if flow:
             entry["flow"] = flow
         clients.append(entry)
@@ -314,24 +356,49 @@ def remote_remove_client(node: dict, client_uuid: str):
     _remote_edit_clients(node, mutate)
 
 
-def remote_sync(node: dict, active_subs: list[dict]):
-    active_by_id = {s["uuid"]: s for s in active_subs}
+def remote_reconcile(node: dict, wanted: dict, relay_wanted: dict, entry_chains: list, exit_nodes: dict, apply_chains: bool = True):
+    def mutate(cfg, client):
+        usable = entry_chains
+        skipped = []
+        if apply_chains:
+            usable, skipped = chains.split_busy_chains(cfg, entry_chains, _busy_ports(client))
+        new_ports = chains.new_ports_needed(cfg, usable) if apply_chains else []
+        changed, problems = chains.sync_config(cfg, wanted, relay_wanted, usable, exit_nodes, apply_chains=apply_chains)
+        return {"changed": changed, "new_ports": new_ports, "problems": skipped + problems}
+    return _remote_edit_config(node, mutate)
 
-    def mutate(clients, tag):
-        current_ids = {c["id"] for c in clients}
-        if current_ids == set(active_by_id.keys()):
-            return None
-        new_clients = [c for c in clients if c["id"] in active_by_id]
-        existing_ids = {c["id"] for c in new_clients}
-        flow = TAG_FLOW.get(tag)
-        for cid in active_by_id:
-            if cid not in existing_ids:
-                entry = {"id": cid, "email": cid}
-                if flow:
-                    entry["flow"] = flow
-                new_clients.append(entry)
-        return new_clients
-    _remote_edit_clients(node, mutate)
+
+PROBE_SCRIPT = """for i in 1 2 3; do
+  s=$(date +%s%N)
+  if timeout 3 bash -c 'exec 3<>/dev/tcp/{host}/{port}' 2>/dev/null; then
+    e=$(date +%s%N)
+    echo $(( (e - s) / 1000000 ))
+  else
+    echo -1
+  fi
+done
+"""
+
+
+def remote_probe(node: dict, host: str, port: int) -> list:
+    if not chains.HOST_RE.match(host or ""):
+        raise ValueError("bad host")
+    port = int(port)
+    client = _mgmt_connect(node["address"])
+    try:
+        stdin, stdout, _ = client.exec_command("bash -s", timeout=30)
+        stdin.write(PROBE_SCRIPT.format(host=host, port=port))
+        stdin.channel.shutdown_write()
+        out = stdout.read().decode(errors="replace")
+    finally:
+        client.close()
+    samples = []
+    for line in out.split():
+        try:
+            samples.append(int(line))
+        except ValueError:
+            continue
+    return samples
 
 
 def remote_query_stats(node: dict) -> dict:

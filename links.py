@@ -89,6 +89,17 @@ def vless_uris_for_node(client_uuid: str, node: dict, base_name: str) -> list[st
     )]
 
 
+def chain_remark(entry_node: dict, exit_node: dict) -> str:
+    return f"{display_name(entry_node['label'])} → {display_name(exit_node['label'])}"
+
+
+def chain_uri(client_uuid: str, entry_node: dict, chain: dict, remark: str) -> str:
+    return _tcp_reality_uri(
+        client_uuid, entry_node["address"], chain["port"], entry_node["public_key"],
+        chain["short_id"], entry_node["sni"], "xtls-rprx-vision", remark,
+    )
+
+
 def build_subscription_text(subs: list[dict]) -> str:
     import db
 
@@ -99,6 +110,10 @@ def build_subscription_text(subs: list[dict]) -> str:
             best_by_node[s["node"]] = s
 
     nodes_by_code = {n["code"]: n for n in db.list_nodes()}
+    chains_by_entry = {}
+    for chain in db.list_chains(enabled_only=True):
+        chains_by_entry.setdefault(chain["entry_node"], []).append(chain)
+
     lines = []
     for node_code, s in best_by_node.items():
         node = nodes_by_code.get(node_code)
@@ -109,5 +124,10 @@ def build_subscription_text(subs: list[dict]) -> str:
         hy = hysteria_uri_for_node(node, base_name)
         if hy:
             lines.append(hy)
+        for chain in chains_by_entry.get(node_code, []):
+            exit_node = nodes_by_code.get(chain["exit_node"])
+            if not node["enabled"] or not exit_node or not exit_node["enabled"]:
+                continue
+            lines.append(chain_uri(s["uuid"], node, chain, chain_remark(node, exit_node)))
     raw = "\n".join(lines)
     return base64.b64encode(raw.encode()).decode()

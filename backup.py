@@ -123,5 +123,8 @@ def restore_backup(data: bytes) -> dict:
     os.chmod(tmp_db_path, 0o600)
     os.replace(tmp_db_path, DB_PATH)
 
+    import db
+    db.init_db()
+
     _prune_old_safety_copies()
     return {"restored_env": restored_env, "safety_copy": safety_copy}

@@ -1,17 +1,22 @@
 import asyncio
+import csv
 import datetime
+import io
 import json
 import os
 import re
 import secrets
 import subprocess
 import urllib.request
+import uuid as uuidlib
+from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, HTTPException, Request, Response, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Body
 from fastapi.responses import HTMLResponse, PlainTextResponse, FileResponse
 
 import backup
+import chains
 import db
 import legal
 import links
@@ -50,6 +55,59 @@ def require_admin(request: Request):
     token = request.cookies.get(ADMIN_COOKIE)
     if not db.validate_admin_session(token):
         raise HTTPException(401, "unauthorized")
+
+
+AUDIT_RULES = [
+    ("POST", r"^/admin/api/nodes$", "node.add"),
+    ("POST", r"^/admin/api/nodes/provision-guide$", "node.provision"),
+    ("POST", r"^/admin/api/nodes/reorder$", "node.reorder"),
+    ("PATCH", r"^/admin/api/nodes/[^/]+$", "node.edit"),
+    ("DELETE", r"^/admin/api/nodes/[^/]+$", "node.delete"),
+    ("POST", r"^/admin/api/chains$", "chain.create"),
+    ("PATCH", r"^/admin/api/chains/[^/]+$", "chain.edit"),
+    ("DELETE", r"^/admin/api/chains/[^/]+$", "chain.delete"),
+    ("POST", r"^/admin/api/subscriptions/[^/]+/revoke$", "sub.revoke"),
+    ("POST", r"^/admin/api/subscriptions/[^/]+/hold$", "sub.hold"),
+    ("POST", r"^/admin/api/subscriptions/[^/]+/resume$", "sub.resume"),
+    ("POST", r"^/admin/api/subscriptions/[^/]+/reset-traffic$", "sub.reset_traffic"),
+    ("POST", r"^/admin/api/users/-?\d+/grant$", "user.grant"),
+    ("POST", r"^/admin/api/users/-?\d+/hwid-limit$", "user.hwid_limit"),
+    ("DELETE", r"^/admin/api/users/-?\d+/devices/\d+$", "user.device_delete"),
+    ("POST", r"^/admin/api/gift-codes$", "gift.create"),
+    ("POST", r"^/admin/api/admins$", "admin.add"),
+    ("DELETE", r"^/admin/api/admins/\d+$", "admin.delete"),
+    ("POST", r"^/admin/api/2fa/enable$", "2fa.enable"),
+    ("POST", r"^/admin/api/2fa/disable$", "2fa.disable"),
+    ("GET", r"^/admin/api/backup$", "backup.download"),
+    ("POST", r"^/admin/api/backup/restore$", "backup.restore"),
+    ("POST", r"^/admin/api/settings/bot$", "settings.bot"),
+    ("POST", r"^/admin/api/branding$", "settings.brand"),
+    ("POST", r"^/admin/api/webhook-settings$", "settings.webhook"),
+    ("POST", r"^/admin/api/hwid-settings$", "settings.hwid"),
+    ("POST", r"^/admin/api/payments/(yookassa-settings|platega-settings|plan-settings|legal-settings)$", "settings.payments"),
+]
+AUDIT_COMPILED = [(method, re.compile(pattern), action) for method, pattern, action in AUDIT_RULES]
+
+
+def _audit_action(method: str, path: str):
+    for rule_method, pattern, action in AUDIT_COMPILED:
+        if rule_method == method and pattern.match(path):
+            return action
+    return None
+
+
+@app.middleware("http")
+async def audit_middleware(request: Request, call_next):
+    path = request.url.path
+    action = _audit_action(request.method, path) if path.startswith("/admin/api/") else None
+    admin_name = None
+    if action:
+        admin = await asyncio.to_thread(db.get_session_admin, request.cookies.get(ADMIN_COOKIE))
+        admin_name = admin["username"] if admin else None
+    response = await call_next(request)
+    if action and response.status_code < 400:
+        await asyncio.to_thread(db.add_audit, admin_name, action, path, _client_ip(request))
+    return response
 
 
 def _days_left(sub: dict) -> int:
@@ -614,11 +672,13 @@ def admin_login(request: Request, response: Response, body: dict = Body(...)):
     admin = db.verify_admin_login(username, password)
     if not admin:
         db.record_login_attempt(ip, "password")
+        db.add_audit(username[:64] or None, "login.failed", "", ip)
         raise HTTPException(401, "wrong username or password")
     db.clear_login_attempts(ip, "password")
     if admin.get("totp_secret"):
         pending_token = db.create_pending_totp(admin["id"])
         return {"ok": True, "needs_totp": True, "pending_token": pending_token}
+    db.add_audit(admin["username"], "login.ok", "", ip)
     token = db.create_admin_session(admin["id"])
     response.set_cookie(ADMIN_COOKIE, token, httponly=True, secure=True, samesite="strict", max_age=7 * 24 * 3600)
     return {"ok": True}
@@ -637,9 +697,11 @@ def admin_login_totp(request: Request, response: Response, body: dict = Body(...
     admin = db.get_admin_by_id(pending["admin_id"])
     if not admin or not admin.get("totp_secret") or not totp.verify(admin["totp_secret"], code):
         db.record_login_attempt(ip, "totp")
+        db.add_audit(admin["username"] if admin else None, "login.totp_failed", "", ip)
         raise HTTPException(401, "wrong code")
     db.clear_login_attempts(ip, "totp")
     db.delete_pending_totp(pending_token)
+    db.add_audit(admin["username"], "login.ok", "2fa", ip)
     token = db.create_admin_session(admin["id"])
     response.set_cookie(ADMIN_COOKIE, token, httponly=True, secure=True, samesite="strict", max_age=7 * 24 * 3600)
     return {"ok": True}
@@ -942,12 +1004,22 @@ def admin_reset_traffic(uuid: str, request: Request):
     return {"ok": ok}
 
 
+@app.get("/admin/api/users")
+def admin_list_users(request: Request, q: str = "", limit: int = 200):
+    require_admin(request)
+    return db.list_users(q=q, limit=limit)
+
+
 @app.get("/admin/api/users/{tg_id}")
 def admin_user_card(tg_id: int, request: Request):
     require_admin(request)
     user = db.get_user(tg_id)
     if not user:
-        raise HTTPException(404, "not found")
+        return {
+            "tg_id": tg_id, "username": None, "created_at": None, "token": None, "exists": False,
+            "subscriptions": [], "devices": [], "hwid_limit": None,
+            "hwid_fallback_limit": settings.get_hwid_settings()["fallback_limit"],
+        }
     subs = db.list_subscriptions_for_user(tg_id)
     nodes_by_code = {n["code"]: n for n in db.list_nodes()}
     plans_by_code = settings.get_plans_by_code()
@@ -966,6 +1038,7 @@ def admin_user_card(tg_id: int, request: Request):
         "username": user["username"],
         "created_at": user["created_at"],
         "token": user["token"],
+        "exists": True,
         "subscriptions": out_subs,
         "devices": db.list_devices(tg_id),
         "hwid_limit": user.get("hwid_limit"),
@@ -1229,6 +1302,222 @@ def admin_node_status(code: str, request: Request):
     if not node:
         raise HTTPException(404, "not found")
     return {"status": node["status"], "enabled": bool(node["enabled"])}
+
+
+def _panel_latency(node: dict) -> dict:
+    samples = chains.tcp_connect_ms(node["address"], node["port"], samples=2, timeout=2.0)
+    return {"code": node["code"], "ms": chains.median_ms(samples)}
+
+
+@app.get("/admin/api/nodes/latency")
+def admin_nodes_latency(request: Request):
+    require_admin(request)
+    targets = [n for n in db.list_nodes() if n["address"] and n["status"] == "active" and n["enabled"]]
+    if not targets:
+        return []
+    with ThreadPoolExecutor(max_workers=min(8, len(targets))) as pool:
+        return list(pool.map(_panel_latency, targets))
+
+
+def _chain_view(chain: dict, nodes_by_code: dict) -> dict:
+    entry = nodes_by_code.get(chain["entry_node"])
+    exit_node = nodes_by_code.get(chain["exit_node"])
+    return {
+        "code": chain["code"], "label": chain["label"],
+        "entry_node": chain["entry_node"], "exit_node": chain["exit_node"],
+        "entry_label": entry["label"] if entry else chain["entry_node"],
+        "exit_label": exit_node["label"] if exit_node else chain["exit_node"],
+        "entry_address": entry["address"] if entry else None,
+        "port": chain["port"], "enabled": bool(chain["enabled"]),
+        "created_at": chain["created_at"],
+    }
+
+
+def _csv_safe(value) -> str:
+    text = str(value)
+    if text and text[0] in "=+-@\t\r":
+        return "'" + text
+    return text
+
+
+def _sync_chain_nodes(chain: dict) -> dict:
+    results = {}
+    for code in dict.fromkeys([chain["entry_node"], chain["exit_node"]]):
+        node = db.get_node(code)
+        if not node:
+            continue
+        try:
+            res = xray_manager.sync_node(node)
+            results[code] = {"ok": not res["problems"], "problems": res["problems"]}
+        except Exception as e:
+            results[code] = {"ok": False, "problems": [str(e)]}
+    return results
+
+
+def _chain_failures(results: dict) -> list:
+    failures = []
+    for code, res in results.items():
+        for problem in res["problems"]:
+            failures.append(f"{code}: {problem}")
+    return failures
+
+
+@app.get("/admin/api/chains")
+def admin_list_chains(request: Request):
+    require_admin(request)
+    nodes_by_code = {n["code"]: n for n in db.list_nodes()}
+    return [_chain_view(c, nodes_by_code) for c in db.list_chains()]
+
+
+@app.post("/admin/api/chains")
+def admin_create_chain(request: Request, body: dict = Body(...)):
+    require_admin(request)
+    entry_code = str(body.get("entry", "")).strip()
+    exit_code = str(body.get("exit", "")).strip()
+    entry = db.get_node(entry_code)
+    exit_node = db.get_node(exit_code)
+    if not entry or not exit_node:
+        raise HTTPException(400, "выбери входной и выходной серверы из списка нод")
+    if entry_code == exit_code:
+        raise HTTPException(400, "вход и выход цепочки должны быть разными серверами")
+    if entry["kind"] not in chains.CHAIN_KINDS_ENTRY:
+        raise HTTPException(400, "входной сервер должен быть под управлением панели (локальный или управляемый)")
+    if exit_node["kind"] not in chains.CHAIN_KINDS_EXIT:
+        raise HTTPException(400, "этот тип ноды нельзя использовать как выход цепочки")
+    for node in (entry, exit_node):
+        if not node["enabled"] or node["status"] != "active":
+            raise HTTPException(400, f"нода «{node['label']}» выключена или ещё не установлена")
+    relay_uuid = None
+    if exit_node["kind"] == "external":
+        if not exit_node.get("shared_uuid"):
+            raise HTTPException(400, "у внешней ноды не задан shared UUID — через неё цепочку не построить")
+    else:
+        relay_uuid = str(uuidlib.uuid4())
+    label = str(body.get("label", "")).strip()[:80] or f"{entry['label']} → {exit_node['label']}"
+    try:
+        chain = db.create_chain(label, entry_code, exit_code, relay_uuid)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    results = _sync_chain_nodes(chain)
+    failures = _chain_failures(results)
+    if failures:
+        db.delete_chain(chain["code"])
+        _sync_chain_nodes(chain)
+        raise HTTPException(502, "цепочка не применилась, всё откатили назад: " + "; ".join(failures))
+    webhooks.send("chain.created", {
+        "code": chain["code"], "label": chain["label"], "entry": entry_code, "exit": exit_code,
+    })
+    nodes_by_code = {n["code"]: n for n in db.list_nodes()}
+    return _chain_view(chain, nodes_by_code)
+
+
+@app.patch("/admin/api/chains/{code}")
+def admin_update_chain(code: str, request: Request, body: dict = Body(...)):
+    require_admin(request)
+    chain = db.get_chain(code)
+    if not chain:
+        raise HTTPException(404, "not found")
+    fields = {}
+    if "label" in body:
+        label = str(body["label"]).strip()[:80]
+        if not label:
+            raise HTTPException(400, "название не может быть пустым")
+        fields["label"] = label
+    toggled = "enabled" in body and bool(body["enabled"]) != bool(chain["enabled"])
+    if "enabled" in body:
+        fields["enabled"] = 1 if body["enabled"] else 0
+    updated = db.update_chain(code, **fields)
+    if toggled:
+        failures = _chain_failures(_sync_chain_nodes(updated))
+        if failures:
+            db.update_chain(code, enabled=chain["enabled"])
+            _sync_chain_nodes(chain)
+            raise HTTPException(502, "не получилось применить: " + "; ".join(failures))
+        webhooks.send("chain.enabled" if updated["enabled"] else "chain.disabled", {
+            "code": code, "label": updated["label"],
+        })
+    nodes_by_code = {n["code"]: n for n in db.list_nodes()}
+    return _chain_view(db.get_chain(code), nodes_by_code)
+
+
+@app.delete("/admin/api/chains/{code}")
+def admin_delete_chain(code: str, request: Request):
+    require_admin(request)
+    chain = db.get_chain(code)
+    if not chain:
+        raise HTTPException(404, "not found")
+    db.delete_chain(code)
+    results = _sync_chain_nodes(chain)
+    webhooks.send("chain.deleted", {"code": code, "label": chain["label"]})
+    return {"ok": True, "warnings": _chain_failures(results)}
+
+
+def _hop_probe(entry: dict, exit_node: dict) -> dict:
+    try:
+        samples = xray_manager.probe_from_node(entry, exit_node["address"], exit_node["port"])
+    except Exception as e:
+        return {"rtt_ms": None, "samples": [], "level": "unknown", "error": str(e)}
+    rtt = chains.median_ms(samples)
+    return {"rtt_ms": rtt, "samples": samples, "level": chains.latency_level(rtt)}
+
+
+@app.get("/admin/api/chains/probe")
+def admin_probe_chain(entry: str, exit: str, request: Request):
+    require_admin(request)
+    entry_node = db.get_node(entry)
+    exit_node = db.get_node(exit)
+    if not entry_node or not exit_node or entry == exit:
+        raise HTTPException(400, "нужны две разные ноды")
+    return _hop_probe(entry_node, exit_node)
+
+
+@app.post("/admin/api/chains/{code}/check")
+def admin_check_chain(code: str, request: Request):
+    require_admin(request)
+    chain = db.get_chain(code)
+    if not chain:
+        raise HTTPException(404, "not found")
+    entry = db.get_node(chain["entry_node"])
+    exit_node = db.get_node(chain["exit_node"])
+    if not entry or not exit_node:
+        raise HTTPException(400, "одна из нод цепочки удалена")
+    entry_alive = nodeprov.check_node_alive(entry["address"], chain["port"])
+    hop = _hop_probe(entry, exit_node)
+    return {"entry_alive": entry_alive, **hop}
+
+
+@app.get("/admin/api/audit")
+def admin_audit(request: Request, limit: int = 100):
+    require_admin(request)
+    return db.list_audit(limit=max(1, min(limit, 500)))
+
+
+@app.get("/admin/api/subscriptions/export.csv")
+def admin_export_subscriptions(request: Request):
+    require_admin(request)
+    nodes_by_code = {n["code"]: n for n in db.list_nodes()}
+    plans_by_code = settings.get_plans_by_code()
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["tg_id", "username", "node", "plan", "created_at", "expires_at", "days_left", "status", "uuid"])
+    for s in db.list_all_subscriptions(limit=100000):
+        node = nodes_by_code.get(s["node"])
+        plan = plans_by_code.get(s["plan"])
+        if s.get("held_at"):
+            status = "held"
+        elif not s["active"] or s["expires_at"] <= db.now_iso():
+            status = "expired"
+        else:
+            status = "active"
+        writer.writerow([_csv_safe(v) for v in [
+            s["tg_id"], s.get("username") or "", node["label"] if node else s["node"],
+            plan["label"] if plan else s["plan"], s["created_at"], s["expires_at"],
+            _days_left(s), status, s["uuid"],
+        ]])
+    return Response(
+        content="﻿" + buf.getvalue(), media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="subscriptions.csv"'},
+    )
 
 
 
