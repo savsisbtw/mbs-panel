@@ -1,0 +1,599 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Compile check all Python files
+        run: python -m compileall -q .
+
+      - name: Shell syntax check
+        run: |
+          bash -n install.sh
+          bash -n mbs
+          bash -n tests/test_mbs_update.sh
+
+      - name: Smoke test mbs update and mirror (manual edits on the server, url mirror, unsafe urls, rollback)
+        run: bash tests/test_mbs_update.sh
+
+      - name: Smoke test install-script rendering
+        env:
+          BOT_TOKEN: "x"
+          BOT_USERNAME: "x"
+          ADMIN_IDS: "1"
+          ADMIN_PANEL_PASSWORD: "ci-test-password-not-real"
+          PANEL_DOMAIN: "panel.test"
+          SUB_DOMAIN: "sub.test"
+          SITE_DOMAIN: "test"
+          XRAY_PUBLIC_KEY: "x"
+          XRAY_SHORT_ID_TCP: "x"
+          XRAY_SHORT_ID_GRPC: "x"
+          XRAY_SHORT_ID_XHTTP: "x"
+        run: |
+          python - << 'PYEOF'
+          import json
+          import nodeprov
+
+          transports = nodeprov.build_transports("fi2.example.com", 443, "www.microsoft.com", "PUBKEY", include_ws=True)
+          node = {
+              "provision_token": "TESTTOKEN",
+              "address": "fi2.example.com",
+              "sni": "www.microsoft.com",
+              "private_key": "PRIVKEY",
+              "transports_json": json.dumps(transports),
+              "hysteria_enabled": 1,
+              "hysteria_port": 443,
+              "hysteria_password": "hypass",
+              "hysteria_obfs_password": "obfspass",
+          }
+          script = nodeprov.render_install_script(node)
+          assert "PRIVKEY" in script
+          assert "PREFLIGHT_FAIL" in script and "443 2053 2087" in script, "node install must refuse a non-empty server before touching it"
+          assert script.index("PREFLIGHT_FAIL") < script.index("authorized_keys"), "preflight must run before the management key is added"
+          assert "OK=$((OK+1))" in script and "STATUS=failed" in script, "node must report active only after xray stays up"
+          assert len(script) > 500
+          print("node install script rendered OK,", len(script), "bytes")
+          PYEOF
+
+      - name: Smoke test app wiring + payments + HWID logic
+        env:
+          BOT_TOKEN: "123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          BOT_USERNAME: "x"
+          ADMIN_IDS: "1"
+          ADMIN_PANEL_PASSWORD: "ci-test-password-not-real"
+          PANEL_DOMAIN: "panel.test"
+          SUB_DOMAIN: "sub.test"
+          SITE_DOMAIN: "test"
+          XRAY_PUBLIC_KEY: "x"
+          XRAY_SHORT_ID_TCP: "x"
+          XRAY_SHORT_ID_GRPC: "x"
+          XRAY_SHORT_ID_XHTTP: "x"
+          PAYMENTS_ENABLED: "true"
+          YOOKASSA_ENABLED: "true"
+          YOOKASSA_SHOP_ID: "123"
+          YOOKASSA_SECRET_KEY: "xxx"
+          PLATEGA_ENABLED: "true"
+          PLATEGA_MERCHANT_ID: "abc"
+          PLATEGA_SECRET: "yyy"
+          HWID_LIMIT_ENABLED: "true"
+        run: |
+          python - << 'PYEOF'
+          import hashlib
+          import hmac
+
+          import api
+          import bot
+          import payments
+          import db
+
+          assert set(payments.available_providers()) == {"yookassa", "platega"}
+
+          good_sig = hmac.new(b"yyy", b'{"a":1}', hashlib.sha256).hexdigest()
+          assert payments.verify_platega_signature(b'{"a":1}', good_sig)
+          assert not payments.verify_platega_signature(b'{"a":1}', "wrong")
+
+          db.init_db()
+          db.create_payment("pid1", 1, "de1", "1m", "yookassa", 399)
+          assert db.mark_payment_paid("pid1")["status"] == "paid"
+          assert db.mark_payment_paid("pid1") is None
+
+          db.get_or_create_user(1, "tester")
+          db.add_device(1, "hwid-aaaaaaaaaa", "android", "Pixel", "ua")
+          assert db.count_devices(1) == 1
+          assert db.get_device(1, "hwid-aaaaaaaaaa") is not None
+
+          print("app wiring + payments + HWID logic OK")
+
+          import legal
+          import settings
+
+          assert settings.get_brand_name() == "MBS Panel"
+          legal.update_env_var("BRAND_NAME", "CI Test Brand")
+          assert settings.get_brand_name() == "CI Test Brand"
+
+          index_html = legal.render_site_page("index.html")
+          assert "CI Test Brand" in index_html
+          assert "MBS Panel" not in index_html
+          assert "example.com" not in index_html
+          assert "YourBot_robot" not in index_html
+          assert "{{" not in index_html and "}}" not in index_html
+
+          cabinet_html = legal.render_site_page("cabinet.html")
+          assert "CI Test Brand" in cabinet_html
+          assert "{{" not in cabinet_html and "}}" not in cabinet_html
+
+          fake_request = type("FakeRequest", (), {"headers": {}})()
+          root_resp = api.root(fake_request)
+          assert "CI Test Brand" in root_resp
+
+          plans_resp = api.public_plans()
+          assert plans_resp["plans"][0]["code"] == "7d"
+
+          branding_resp = api.public_branding()
+          assert branding_resp["brand_name"] == "CI Test Brand"
+
+          print("branding: site templates + public routes render live, no restart OK")
+          PYEOF
+
+      - name: Smoke test TOTP, backup/restore, node reorder, multi-admin, rate-limit
+        env:
+          BOT_TOKEN: "123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          BOT_USERNAME: "x"
+          ADMIN_IDS: "1"
+          ADMIN_PANEL_PASSWORD: "ci-test-password-not-real"
+          PANEL_DOMAIN: "panel.test"
+          SUB_DOMAIN: "sub.test"
+          SITE_DOMAIN: "test"
+          XRAY_PUBLIC_KEY: "x"
+          XRAY_SHORT_ID_TCP: "x"
+          XRAY_SHORT_ID_GRPC: "x"
+          XRAY_SHORT_ID_XHTTP: "x"
+        run: |
+          python - << 'PYEOF'
+          import base64
+          import db
+          import totp
+
+          raw_key = b"12345678901234567890"
+          secret = base64.b32encode(raw_key).decode("ascii").rstrip("=")
+          expected = ["755224","287082","359152","969429","338314","254676","287922","162583","399871","520489"]
+          for counter, exp in enumerate(expected):
+              assert totp._hotp(secret, counter) == exp, f"RFC 4226 vector failed at counter={counter}"
+          print("TOTP: all 10 RFC 4226 test vectors pass")
+
+          db.init_db()
+
+          db.create_node("n1", "Node One", "managed", "1.1.1.1", 443, "pub1", "sid1", "sni1", "xtls-rprx-vision")
+          db.create_node("n2", "Node Two", "managed", "2.2.2.2", 443, "pub2", "sid2", "sni2", "xtls-rprx-vision")
+          order = [n["code"] for n in db.list_nodes()]
+          assert order == ["de1", "n1", "n2"], order
+          db.reorder_nodes(["n2", "de1", "n1"])
+          assert [n["code"] for n in db.list_nodes()] == ["n2", "de1", "n1"]
+          try:
+              db.reorder_nodes(["n2", "de1"])
+              assert False, "should reject incomplete reorder list"
+          except ValueError:
+              pass
+          print("node reorder OK")
+
+          import backup
+          data = backup.create_backup()
+          db.create_node("n3", "Node Three", "managed", "3.3.3.3", 443, "pub3", "sid3", "sni3", "xtls-rprx-vision")
+          assert len(db.list_nodes()) == 4
+          backup.restore_backup(data)
+          assert len(db.list_nodes()) == 3, "restore should have reverted the extra node"
+          print("backup/restore round-trip OK")
+
+          admin = db.verify_admin_login("admin", "ci-test-password-not-real")
+          assert admin is not None
+          second = db.create_admin("second", "another-strong-password")
+          assert len(db.list_admins()) == 2
+          try:
+              db.delete_admin(admin["id"])
+              db.delete_admin(second["id"])
+              assert False, "should refuse deleting the last admin"
+          except ValueError:
+              pass
+          print("multi-admin OK")
+
+          ip = "203.0.113.9"
+          for _ in range(10):
+              db.record_login_attempt(ip, "password")
+          assert db.count_recent_login_attempts(ip, "password", minutes=15) >= 10
+          db.clear_login_attempts(ip, "password")
+          assert db.count_recent_login_attempts(ip, "password", minutes=15) == 0
+          print("rate-limit counters OK")
+
+          import datetime as dt
+
+          hold_sub = db.create_subscription(999, "n1", 30, "1m", source="bot")
+          original_expires = dt.datetime.fromisoformat(hold_sub["expires_at"])
+          assert db.hold_subscription(hold_sub["uuid"])
+          assert db.hold_subscription(hold_sub["uuid"]) is False
+          assert len(db.list_active_subscriptions(tg_id=999)) == 0, "held sub must not count as active"
+          with db.get_conn() as conn:
+              simulated = (dt.datetime.utcnow() - dt.timedelta(hours=5)).isoformat()
+              conn.execute("UPDATE subscriptions SET held_at=? WHERE uuid=?", (simulated, hold_sub["uuid"]))
+          resumed = db.resume_subscription(hold_sub["uuid"])
+          assert resumed["held_at"] is None
+          shift_hours = (dt.datetime.fromisoformat(resumed["expires_at"]) - original_expires).total_seconds() / 3600
+          assert 4.9 <= shift_hours <= 5.1, f"expected ~5h shift, got {shift_hours}"
+          assert len(db.list_active_subscriptions(tg_id=999)) == 1, "resumed sub must count as active again"
+          assert db.resume_subscription(hold_sub["uuid"]) is None
+          print("subscription hold/resume OK")
+
+          print("all v1.1.0 feature smoke tests passed")
+          PYEOF
+
+      - name: Smoke test live settings (.env-backed plans/toggles/HWID/credentials, no restart)
+        env:
+          BOT_TOKEN: "123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          BOT_USERNAME: "x"
+          ADMIN_IDS: "1"
+          ADMIN_PANEL_PASSWORD: "ci-test-password-not-real"
+          PANEL_DOMAIN: "panel.test"
+          SUB_DOMAIN: "sub.test"
+          SITE_DOMAIN: "test"
+          XRAY_PUBLIC_KEY: "x"
+          XRAY_SHORT_ID_TCP: "x"
+          XRAY_SHORT_ID_GRPC: "x"
+          XRAY_SHORT_ID_XHTTP: "x"
+        run: |
+          python - << 'PYEOF'
+          import hashlib
+          import hmac
+
+          with open(".env", "a", encoding="utf-8") as f:
+              f.write("PLATEGA_SECRET=old_secret\n")
+              f.write("PLATEGA_ENABLED=true\n")
+              f.write("PLATEGA_MERCHANT_ID=m1\n")
+
+          import legal
+          import settings
+          import payments
+
+          plans = settings.get_plans_by_code()
+          assert plans["1m"]["price"] > 0, "default price should come from config before any .env override"
+
+          settings.set_plan_prices({"1m": 4242})
+          assert settings.get_plans_by_code()["1m"]["price"] == 4242, "price edit should apply live, no reimport"
+          assert settings.get_plans_by_code()["7d"]["price"] != 4242, "unrelated plan must stay untouched"
+
+          assert settings.get_hwid_settings()["enabled"] is False
+          legal.update_env_var("HWID_LIMIT_ENABLED", "true")
+          legal.update_env_var("HWID_FALLBACK_LIMIT", "9")
+          hwid = settings.get_hwid_settings()
+          assert hwid["enabled"] is True and hwid["fallback_limit"] == 9, "HWID settings should apply live"
+
+          body = b'{"transactionId":"t1","status":"CONFIRMED"}'
+          sig_old = hmac.new(b"old_secret", body, hashlib.sha256).hexdigest()
+          assert payments.verify_platega_signature(body, sig_old), "signature must verify against the current secret"
+
+          legal.update_env_var("PLATEGA_SECRET", "rotated_secret")
+          assert not payments.verify_platega_signature(body, sig_old), "OLD signature must be rejected right after rotation, same process, no restart"
+          sig_new = hmac.new(b"rotated_secret", body, hashlib.sha256).hexdigest()
+          assert payments.verify_platega_signature(body, sig_new), "NEW signature must verify immediately after rotation, same process, no restart"
+
+          for _ in range(5):
+              legal.update_env_var("HWID_FALLBACK_LIMIT", "9")
+          with open(".env", encoding="utf-8") as f:
+              lines = [l for l in f.readlines() if l.startswith("HWID_FALLBACK_LIMIT=")]
+          assert len(lines) == 1, "repeated writes to the same key must not duplicate .env lines"
+
+          print("live settings: prices/HWID/credential-rotation all apply with zero reimport OK")
+          PYEOF
+
+      - name: Smoke test backup/restore round-trip covers branding + live settings + held subscriptions
+        env:
+          BOT_TOKEN: "123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          BOT_USERNAME: "x"
+          ADMIN_IDS: "1"
+          ADMIN_PANEL_PASSWORD: "ci-test-password-not-real"
+          PANEL_DOMAIN: "panel.test"
+          SUB_DOMAIN: "sub.test"
+          SITE_DOMAIN: "test"
+          XRAY_PUBLIC_KEY: "x"
+          XRAY_SHORT_ID_TCP: "x"
+          XRAY_SHORT_ID_GRPC: "x"
+          XRAY_SHORT_ID_XHTTP: "x"
+        run: |
+          python - << 'PYEOF'
+          import backup
+          import db
+          import legal
+          import settings
+
+          db.init_db()
+          db.create_node("bk1", "Node One", "managed", "1.1.1.1", 443, "pub1", "sid1", "sni1", "xtls-rprx-vision")
+
+          sub_a = db.create_subscription(111, "bk1", 30, "1m", source="bot")
+          sub_b = db.create_subscription(222, "bk1", 30, "1m", source="bot")
+
+          legal.update_env_var("BRAND_NAME", "SnapshotBrand")
+          settings.set_plan_prices({"1m": 555})
+          legal.update_env_var("HWID_LIMIT_ENABLED", "true")
+          legal.update_env_var("HWID_FALLBACK_LIMIT", "4")
+          assert db.hold_subscription(sub_a["uuid"])
+
+          assert settings.get_brand_name() == "SnapshotBrand"
+          assert settings.get_plans_by_code()["1m"]["price"] == 555
+          assert settings.get_hwid_settings() == {"enabled": True, "fallback_limit": 4}
+          assert len(db.list_active_subscriptions(tg_id=111)) == 0, "held sub excluded pre-backup"
+          assert len(db.list_active_subscriptions(tg_id=222)) == 1
+
+          snapshot = backup.create_backup()
+
+          legal.update_env_var("BRAND_NAME", "MutatedAfterBackup")
+          settings.set_plan_prices({"1m": 999})
+          legal.update_env_var("HWID_LIMIT_ENABLED", "false")
+          assert db.resume_subscription(sub_a["uuid"])["held_at"] is None
+          sub_c = db.create_subscription(333, "bk1", 30, "1m", source="bot")
+          assert settings.get_brand_name() == "MutatedAfterBackup"
+          assert len(db.list_active_subscriptions(tg_id=111)) == 1
+
+          result = backup.restore_backup(snapshot)
+          assert result["restored_env"] is True
+
+          assert settings.get_brand_name() == "SnapshotBrand", "brand must revert to snapshot value"
+          assert settings.get_plans_by_code()["1m"]["price"] == 555, "price override must revert"
+          assert settings.get_hwid_settings() == {"enabled": True, "fallback_limit": 4}, "hwid settings must revert"
+
+          restored_sub_a = db.get_subscription(sub_a["uuid"])
+          assert restored_sub_a["held_at"] is not None, "held_at must round-trip through backup/restore"
+          assert len(db.list_active_subscriptions(tg_id=111)) == 0, "sub_a held again after restore"
+          assert len(db.list_active_subscriptions(tg_id=222)) == 1, "sub_b untouched"
+          assert db.get_subscription(sub_c["uuid"]) is None, "sub_c created after backup point must be gone"
+
+          print("backup/restore correctly round-trips branding, live settings and held_at together OK")
+          PYEOF
+
+      - name: Smoke test custom ADMIN_PATH actually moves the login page, not just adds a copy
+        env:
+          BOT_TOKEN: "123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          BOT_USERNAME: "x"
+          ADMIN_IDS: "1"
+          ADMIN_PANEL_PASSWORD: "ci-test-password-not-real"
+          PANEL_DOMAIN: "panel.test"
+          SUB_DOMAIN: "sub.test"
+          SITE_DOMAIN: "test"
+          XRAY_PUBLIC_KEY: "x"
+          XRAY_SHORT_ID_TCP: "x"
+          XRAY_SHORT_ID_GRPC: "x"
+          XRAY_SHORT_ID_XHTTP: "x"
+          ADMIN_PATH: "xyz123secret"
+        run: |
+          python - << 'PYEOF'
+          import api
+
+          paths = {r.path for r in api.app.routes}
+          assert "/xyz123secret" in paths, "custom ADMIN_PATH must be registered as a route"
+          assert "/admin" not in paths, "the default /admin page route must be GONE once a custom path is set, not just supplemented"
+          assert "/admin/api/login" in paths, "the API namespace must stay fixed regardless of ADMIN_PATH"
+
+          fake_request = type("FakeRequest", (), {"headers": {"host": "panel.test"}})()
+          root_response = api.root(fake_request)
+          assert isinstance(root_response, str), \
+              f"root() on PANEL_DOMAIN must return the rendered site page (a string), not admin.html, once ADMIN_PATH is customized — got {type(root_response)}"
+          assert "admin.html" not in root_response
+
+          print("custom ADMIN_PATH: old /admin route gone, new path registered, root() no longer leaks the panel OK")
+          PYEOF
+
+      - name: Smoke test server chains (xray config generation, relay clients, subscription entries, audit log, old-db migration)
+        env:
+          BOT_TOKEN: "123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          BOT_USERNAME: "x"
+          ADMIN_IDS: "1"
+          ADMIN_PANEL_PASSWORD: "ci-test-password-not-real"
+          PANEL_DOMAIN: "panel.test"
+          SUB_DOMAIN: "sub.test"
+          SITE_DOMAIN: "test"
+          XRAY_PUBLIC_KEY: "x"
+          XRAY_SHORT_ID_TCP: "x"
+          XRAY_SHORT_ID_GRPC: "x"
+          XRAY_SHORT_ID_XHTTP: "x"
+        run: |
+          python - << 'PYEOF'
+          import base64
+          import json
+          import urllib.parse
+
+          import chains
+          import db
+          import links
+          import nodeprov
+          import xray_manager
+
+          transports = nodeprov.build_transports("a.example.com", 443, "www.microsoft.com", "PUBA", include_ws=False)
+          entry_cfg = json.loads(nodeprov._build_config_json(transports, "PRIVA", "a.example.com"))
+          exit_cfg = json.loads(nodeprov._build_config_json(
+              nodeprov.build_transports("b.example.com", 443, "www.microsoft.com", "PUBB"), "PRIVB", "b.example.com"))
+
+          wanted = {"uuid-1": "uuid-1", "uuid-2": "uuid-2"}
+          chain = {"code": "cabc12", "port": 10443, "short_id": "1234567890abcdef", "exit_node": "chb", "relay_uuid": "relay-uuid-1"}
+          exit_nodes = {"chb": {
+              "address": "b.example.com", "port": 443, "sni": "www.microsoft.com",
+              "public_key": "PUBB", "short_id": "ffff", "kind": "managed", "shared_uuid": None,
+          }}
+
+          base_before = json.dumps([ib for ib in entry_cfg["inbounds"] if ib["tag"] in chains.BASE_TAGS], sort_keys=True)
+
+          changed, problems = chains.sync_config(entry_cfg, wanted, {}, [chain], exit_nodes)
+          assert changed and not problems, problems
+          tags = [ib["tag"] for ib in entry_cfg["inbounds"]]
+          assert "chain-cabc12" in tags, tags
+          ci = chains.find_inbound(entry_cfg, "chain-cabc12")
+          assert ci["port"] == 10443
+          assert ci["streamSettings"]["realitySettings"]["shortIds"] == ["1234567890abcdef"]
+          assert ci["streamSettings"]["realitySettings"]["privateKey"] == "PRIVA"
+          assert [c["id"] for c in ci["settings"]["clients"]] == ["uuid-1", "uuid-2"]
+          assert all(c["flow"] == "xtls-rprx-vision" for c in ci["settings"]["clients"])
+          out = [o for o in entry_cfg["outbounds"] if o["tag"] == "chain-cabc12-out"]
+          assert len(out) == 1
+          vn = out[0]["settings"]["vnext"][0]
+          assert vn["address"] == "b.example.com" and vn["port"] == 443 and vn["users"][0]["id"] == "relay-uuid-1"
+          assert out[0]["streamSettings"]["realitySettings"]["publicKey"] == "PUBB"
+          rules = [r for r in entry_cfg["routing"]["rules"] if r.get("outboundTag") == "chain-cabc12-out"]
+          assert len(rules) == 1 and rules[0]["inboundTag"] == ["chain-cabc12"]
+          assert entry_cfg["routing"]["rules"][0]["outboundTag"] == "api"
+          assert entry_cfg["outbounds"][0]["tag"] == "direct", "default outbound must stay first"
+          print("entry config: chain inbound/outbound/rule built OK")
+
+          changed2, problems2 = chains.sync_config(entry_cfg, wanted, {}, [chain], exit_nodes)
+          assert not changed2 and not problems2, "second pass must be a no-op"
+          print("idempotent OK")
+
+          wanted3 = {"uuid-2": "uuid-2", "uuid-3": "uuid-3"}
+          changed3, _ = chains.sync_config(entry_cfg, wanted3, {}, [chain], exit_nodes)
+          assert changed3
+          ci = chains.find_inbound(entry_cfg, "chain-cabc12")
+          assert [c["id"] for c in ci["settings"]["clients"]] == ["uuid-2", "uuid-3"]
+          for tag in ("vless-tcp-reality", "vless-grpc-reality", "vless-xhttp-reality"):
+              assert [c["id"] for c in chains.find_inbound(entry_cfg, tag)["settings"]["clients"]] == ["uuid-2", "uuid-3"]
+          print("clients follow the active set on every inbound incl. chain OK")
+
+          changed4, _ = chains.sync_config(entry_cfg, {"uuid-9": "uuid-9"}, {}, [], exit_nodes, apply_chains=False)
+          assert changed4
+          assert chains.find_inbound(entry_cfg, "chain-cabc12") is not None, "apply_chains=False must not drop chains"
+          assert [c["id"] for c in chains.find_inbound(entry_cfg, "chain-cabc12")["settings"]["clients"]] == ["uuid-9"]
+          print("clients-only fallback keeps existing chains and still syncs their clients OK")
+
+          chains.sync_config(entry_cfg, wanted, {}, [], exit_nodes)
+          assert chains.find_inbound(entry_cfg, "chain-cabc12") is None
+          assert not [o for o in entry_cfg["outbounds"] if o["tag"].startswith("chain-")]
+          assert not [r for r in entry_cfg["routing"]["rules"] if str(r.get("outboundTag", "")).startswith("chain-")]
+          base_after = json.dumps([ib for ib in entry_cfg["inbounds"] if ib["tag"] in chains.BASE_TAGS], sort_keys=True)
+          assert json.loads(base_after) != [] and len(json.loads(base_after)) == len(json.loads(base_before))
+          print("removing the chain cleans inbound/outbound/rule OK")
+
+          changed5, p5 = chains.sync_config(exit_cfg, wanted, {"relay-uuid-1": "relay-cabc12"}, [], {})
+          assert changed5 and not p5
+          tcp_ids = [c["id"] for c in chains.find_inbound(exit_cfg, "vless-tcp-reality")["settings"]["clients"]]
+          grpc_ids = [c["id"] for c in chains.find_inbound(exit_cfg, "vless-grpc-reality")["settings"]["clients"]]
+          assert "relay-uuid-1" in tcp_ids and "relay-uuid-1" not in grpc_ids
+          relay_entry = [c for c in chains.find_inbound(exit_cfg, "vless-tcp-reality")["settings"]["clients"] if c["id"] == "relay-uuid-1"][0]
+          assert relay_entry["flow"] == "xtls-rprx-vision" and relay_entry["email"] == "relay-cabc12"
+          changed6, _ = chains.sync_config(exit_cfg, wanted, {"relay-uuid-1": "relay-cabc12"}, [], {})
+          assert not changed6
+          print("exit node keeps the relay client only on the TCP inbound and survives sync OK")
+
+          busy_cfg = json.loads(nodeprov._build_config_json(transports, "PRIVA", "a.example.com"))
+          usable, skipped = chains.split_busy_chains(busy_cfg, [chain], {10443})
+          assert usable == [] and len(skipped) == 1
+          usable2, skipped2 = chains.split_busy_chains(busy_cfg, [chain], set())
+          assert usable2 == [chain] and skipped2 == []
+          chains.sync_config(busy_cfg, wanted, {}, [chain], exit_nodes)
+          usable3, skipped3 = chains.split_busy_chains(busy_cfg, [chain], {10443})
+          assert usable3 == [chain], "an already-applied chain is not a new port, busy check must ignore it"
+          print("busy port handling OK")
+
+          ext_nodes = {"chb": dict(exit_nodes["chb"], kind="external", shared_uuid="shared-1")}
+          ext_chain = dict(chain, relay_uuid=None)
+          cfg_e = json.loads(nodeprov._build_config_json(transports, "PRIVA", "a.example.com"))
+          ch, pr = chains.sync_config(cfg_e, wanted, {}, [ext_chain], ext_nodes)
+          assert ch and not pr
+          assert [o for o in cfg_e["outbounds"] if o["tag"] == "chain-cabc12-out"][0]["settings"]["vnext"][0]["users"][0]["id"] == "shared-1"
+          no_key = dict(ext_nodes["chb"], shared_uuid=None)
+          cfg_f = json.loads(nodeprov._build_config_json(transports, "PRIVA", "a.example.com"))
+          ch, pr = chains.sync_config(cfg_f, wanted, {}, [ext_chain], {"chb": no_key})
+          assert pr and chains.find_inbound(cfg_f, "chain-cabc12") is None
+          print("external exit uses shared uuid, missing key is reported OK")
+
+          assert chains.latency_level(10) == "low" and chains.latency_level(80) == "medium" and chains.latency_level(300) == "high"
+          assert chains.latency_level(None) == "unknown"
+          assert chains.median_ms([-1, -1]) is None and chains.median_ms([30, 10, -1]) == 30
+          print("latency helpers OK")
+
+          db.init_db()
+          db.create_node("cha", "🇫🇮 Финляндия", "managed", "fi.example.com", 443, "PUBFI", "sidfi", "www.microsoft.com", "xtls-rprx-vision")
+          db.create_node("chb", "🇳🇱 Нидерланды", "managed", "nl.example.com", 443, "PUBNL", "sidnl", "www.microsoft.com", "xtls-rprx-vision")
+          db.create_node("chx", "Внешняя", "external", "ex.example.com", 443, "PUBEX", "sidex", "www.microsoft.com", "xtls-rprx-vision", shared_uuid="shared-ex")
+
+          c1 = db.create_chain("Финка → Голландия", "cha", "chb", "relay-1")
+          assert c1["port"] == 10443 and len(c1["short_id"]) == 16 and c1["code"].startswith("c")
+          c2 = db.create_chain("Финка → Внешняя", "cha", "chx", None)
+          assert c2["port"] == 10444
+          try:
+              db.create_chain("dup", "cha", "chb", "x")
+              assert False
+          except ValueError:
+              pass
+          try:
+              db.delete_node("chb")
+              assert False, "node used in chain must not be deletable"
+          except ValueError as e:
+              assert "chain" in str(e)
+          assert [c["code"] for c in db.list_chains()] == [c1["code"], c2["code"]]
+          assert len(db.list_chains(enabled_only=True)) == 2
+          db.update_chain(c2["code"], enabled=0)
+          assert len(db.list_chains(enabled_only=True)) == 1
+          assert db.stats()["chains"] == 1
+          print("db chains CRUD, port allocation, node-delete guard OK")
+
+          sub = db.create_subscription(500, "cha", 30, "1m", source="bot")
+          text = base64.b64decode(links.build_subscription_text([sub])).decode()
+          lines = text.split("\n")
+          chain_lines = [l for l in lines if ":10443?" in l]
+          assert len(chain_lines) == 1, lines
+          assert "10444" not in text, "disabled chain must not leak into the subscription"
+          parsed = urllib.parse.urlparse(chain_lines[0])
+          assert parsed.hostname == "fi.example.com" and parsed.port == 10443
+          qs = urllib.parse.parse_qs(parsed.query)
+          assert qs["sid"] == [c1["short_id"]] and qs["pbk"] == ["PUBFI"] and qs["flow"] == ["xtls-rprx-vision"]
+          assert urllib.parse.unquote(parsed.fragment) == "🇫🇮 Финляндия → 🇳🇱 Нидерланды"
+          assert parsed.username == sub["uuid"]
+          print("subscription text carries the chain entry for the entry node's subscribers OK")
+
+          other = db.create_subscription(501, "chb", 30, "1m", source="bot")
+          text2 = base64.b64decode(links.build_subscription_text([other])).decode()
+          assert ":10443?" not in text2, "subscribers of the exit node must not get the entry node's chain"
+          print("chain is only offered to entry-node subscribers OK")
+
+          db.update_node("cha", enabled=0)
+          text3 = base64.b64decode(links.build_subscription_text([sub])).decode()
+          assert text3.strip() == ""
+          db.update_node("cha", enabled=1)
+
+          db.update_chain(c2["code"], enabled=1)
+          node_n1 = db.get_node("cha")
+          w, relay, entry_chains, exit_n = xray_manager.desired_state(node_n1)
+          assert sub["uuid"] in w and [c["code"] for c in entry_chains] == [c1["code"], c2["code"]] and relay == {}
+          node_n2 = db.get_node("chb")
+          w2, relay2, entry2, exit2 = xray_manager.desired_state(node_n2)
+          assert relay2 == {"relay-1": chains.relay_email(c1["code"])} and entry2 == []
+          node_ex = db.get_node("chx")
+          w3, relay3, entry3, exit3 = xray_manager.desired_state(node_ex)
+          assert relay3 == {}
+          db.update_node("chb", enabled=0)
+          w4, relay4, entry4, exit4 = xray_manager.desired_state(node_n1)
+          assert [c["code"] for c in entry4] == [c2["code"]], "chain whose exit is disabled must drop out"
+          print("desired_state: entry/relay/disabled-node logic OK")
+
+          db.add_audit("admin", "node.add", "/admin/api/nodes", "1.2.3.4")
+          db.add_audit(None, "login.failed", "", "5.6.7.8")
+          rows = db.list_audit(10)
+          assert rows[0]["action"] == "login.failed" and rows[1]["admin"] == "admin"
+          print("audit log OK")
+
+          with db.get_conn() as conn:
+              conn.execute("DROP TABLE chains")
+              conn.execute("DROP TABLE audit_log")
+          db.init_db()
+          assert db.list_chains() == [] and db.list_audit() == []
+          print("init_db recreates chain/audit tables on an old database OK")
+
+          print("chains: all smoke tests passed")
+          PYEOF
