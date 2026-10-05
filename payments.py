@@ -8,7 +8,7 @@ import urllib.request
 from config import PANEL_DOMAIN
 import settings
 
-PROVIDER_NAMES = {"yookassa": "ЮKassa", "platega": "Platega"}
+PROVIDER_NAMES = {"yookassa": "ЮKassa", "platega": "Platega", "cryptobot": "Криптовалюта (CryptoBot)"}
 
 
 def available_providers() -> list[str]:
@@ -18,6 +18,8 @@ def available_providers() -> list[str]:
         providers.append("yookassa")
     if enabled["platega_enabled"]:
         providers.append("platega")
+    if enabled["cryptobot_enabled"] and settings.cryptobot_token():
+        providers.append("cryptobot")
     return providers
 
 
@@ -119,8 +121,46 @@ def check_platega_payment(external_id: str) -> str:
     return data.get("status", "")
 
 
-PAID_STATUSES = {"succeeded", "CONFIRMED"}
-FAILED_STATUSES = {"canceled", "CANCELED", "CHARGEBACKED"}
+CRYPTOBOT_API = "https://pay.crypt.bot/api"
+
+
+def _cryptobot_headers() -> dict:
+    return {"Crypto-Pay-API-Token": settings.cryptobot_token(), "Content-Type": "application/json"}
+
+
+def create_cryptobot_payment(payment_id: str, amount_rub: int, description: str):
+    data = _post_json(
+        CRYPTOBOT_API + "/createInvoice",
+        {
+            "currency_type": "fiat",
+            "fiat": "RUB",
+            "amount": str(amount_rub),
+            "description": description[:1000],
+            "payload": payment_id,
+            "allow_comments": False,
+            "allow_anonymous": True,
+            "expires_in": 3600,
+        },
+        _cryptobot_headers(),
+    )
+    if not data.get("ok"):
+        raise ValueError("cryptobot refused the invoice")
+    result = data["result"]
+    return str(result["invoice_id"]), result.get("bot_invoice_url") or result.get("pay_url")
+
+
+def check_cryptobot_payment(external_id: str) -> str:
+    data = _get_json(CRYPTOBOT_API + f"/getInvoices?invoice_ids={external_id}", _cryptobot_headers())
+    items = (data.get("result") or {}).get("items") or []
+    return items[0].get("status", "") if items else ""
+
+
+def validate_cryptobot_token(token: str) -> dict:
+    return _get_json(CRYPTOBOT_API + "/getMe", {"Crypto-Pay-API-Token": token})
+
+
+PAID_STATUSES = {"succeeded", "CONFIRMED", "paid"}
+FAILED_STATUSES = {"canceled", "CANCELED", "CHARGEBACKED", "expired"}
 
 
 def create_payment_link(provider: str, payment_id: str, amount_rub: int, description: str):
@@ -128,6 +168,8 @@ def create_payment_link(provider: str, payment_id: str, amount_rub: int, descrip
         return create_yookassa_payment(payment_id, amount_rub, description)
     if provider == "platega":
         return create_platega_payment(payment_id, amount_rub, description)
+    if provider == "cryptobot":
+        return create_cryptobot_payment(payment_id, amount_rub, description)
     raise ValueError(f"unknown provider: {provider}")
 
 
@@ -136,4 +178,6 @@ def check_payment_status(provider: str, external_id: str) -> str:
         return check_yookassa_payment(external_id)
     if provider == "platega":
         return check_platega_payment(external_id)
+    if provider == "cryptobot":
+        return check_cryptobot_payment(external_id)
     raise ValueError(f"unknown provider: {provider}")

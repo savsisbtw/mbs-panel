@@ -85,11 +85,13 @@ AUDIT_RULES = [
     ("POST", r"^/admin/api/webhook-settings$", "settings.webhook"),
     ("POST", r"^/admin/api/hwid-settings$", "settings.hwid"),
     ("POST", r"^/admin/api/features$", "settings.features"),
+    ("POST", r"^/admin/api/tokens$", "token.create"),
+    ("DELETE", r"^/admin/api/tokens/\d+$", "token.revoke"),
     ("POST", r"^/admin/api/promos$", "promo.create"),
     ("PATCH", r"^/admin/api/promos/[^/]+$", "promo.edit"),
     ("DELETE", r"^/admin/api/promos/[^/]+$", "promo.delete"),
     ("POST", r"^/admin/api/subscriptions/[^/]+/traffic-limit$", "sub.traffic_limit"),
-    ("POST", r"^/admin/api/payments/(yookassa-settings|platega-settings|plan-settings|legal-settings)$", "settings.payments"),
+    ("POST", r"^/admin/api/payments/(yookassa-settings|platega-settings|cryptobot-settings|plan-settings|legal-settings)$", "settings.payments"),
 ]
 AUDIT_COMPILED = [(method, re.compile(pattern), action) for method, pattern, action in AUDIT_RULES]
 
@@ -525,6 +527,33 @@ def admin_set_platega_settings(request: Request, body: dict = Body(...)):
     except Exception:
         restarted = False
     return {"ok": True, "restarted_bot": restarted}
+
+
+@app.get("/admin/api/payments/cryptobot-settings")
+def admin_get_cryptobot_settings(request: Request):
+    require_admin(request)
+    return {
+        "enabled": settings.get_payment_settings()["cryptobot_enabled"],
+        "has_token": bool(settings.cryptobot_token()),
+    }
+
+
+@app.post("/admin/api/payments/cryptobot-settings")
+def admin_set_cryptobot_settings(request: Request, body: dict = Body(...)):
+    require_admin(request)
+    token = (body.get("token") or "").strip()
+    if not token:
+        raise HTTPException(400, "нужен токен из @CryptoBot (Crypto Pay)")
+    try:
+        check = payments.validate_cryptobot_token(token)
+    except Exception:
+        raise HTTPException(400, "CryptoBot не принял токен, проверь его")
+    if not check.get("ok"):
+        raise HTTPException(400, "CryptoBot не принял токен, проверь его")
+    _update_env_var("CRYPTOBOT_TOKEN", token)
+    _update_env_var("CRYPTOBOT_ENABLED", "true")
+    _update_env_var("PAYMENTS_ENABLED", "true")
+    return {"ok": True}
 
 
 @app.get("/admin/api/payments/plan-settings")
@@ -1049,6 +1078,139 @@ def admin_set_features(request: Request, body: dict = Body(...)):
     except (TypeError, ValueError):
         raise HTTPException(400, "неверные значения настроек")
     return settings.get_features()
+
+
+@app.get("/admin/api/tokens")
+def admin_list_tokens(request: Request):
+    require_admin(request)
+    return db.list_api_tokens()
+
+
+@app.post("/admin/api/tokens")
+def admin_create_token(request: Request, body: dict = Body(...)):
+    require_admin(request)
+    try:
+        return db.create_api_token(str(body.get("name", "")))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/admin/api/tokens/{token_id}")
+def admin_revoke_token(token_id: int, request: Request):
+    require_admin(request)
+    db.revoke_api_token(token_id)
+    return {"ok": True}
+
+
+def require_api_token(request: Request) -> dict:
+    header = request.headers.get("authorization", "")
+    token = header[7:].strip() if header.lower().startswith("bearer ") else ""
+    row = db.verify_api_token(token)
+    if not row:
+        raise HTTPException(401, "invalid api token")
+    return row
+
+
+def _public_sub(sub: dict) -> dict:
+    user = db.get_user(sub["tg_id"])
+    return {
+        "uuid": sub["uuid"], "tg_id": sub["tg_id"], "node": sub["node"], "plan": sub["plan"],
+        "created_at": sub["created_at"], "expires_at": sub["expires_at"], "active": bool(sub["active"]),
+        "traffic_limit": sub.get("traffic_limit"), "traffic_used": sub.get("traffic_used", 0),
+        "subscription_url": f"https://{SUB_DOMAIN}/sub/{user['token']}" if user else None,
+    }
+
+
+@app.get("/api/v1/me")
+def public_me(request: Request):
+    row = require_api_token(request)
+    return {"token_name": row["name"]}
+
+
+@app.get("/api/v1/nodes")
+def public_nodes(request: Request):
+    require_api_token(request)
+    return [{"code": n["code"], "label": n["label"]} for n in db.list_nodes(enabled_only=True) if n["status"] == "active"]
+
+
+@app.get("/api/v1/plans")
+def public_plans(request: Request):
+    require_api_token(request)
+    return [{"code": p["code"], "label": p["label"], "days": p["days"], "price": p["price"]} for p in settings.get_plans()]
+
+
+@app.post("/api/v1/subscriptions")
+def public_create_subscription(request: Request, body: dict = Body(...)):
+    require_api_token(request)
+    try:
+        tg_id = int(body.get("tg_id"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "tg_id должен быть числом")
+    node = db.get_node(body.get("node"))
+    plan = settings.get_plans_by_code().get(body.get("plan"))
+    if not node or not node["enabled"] or node["status"] != "active" or not plan:
+        raise HTTPException(400, "неизвестная нода или тариф")
+    limit = settings.default_traffic_limit_bytes()
+    if body.get("traffic_gb") not in (None, ""):
+        try:
+            gb = float(body["traffic_gb"])
+        except (TypeError, ValueError):
+            raise HTTPException(400, "traffic_gb должен быть числом")
+        limit = int(gb * settings.GB) if gb > 0 else None
+    db.get_or_create_user(tg_id, None)
+    sub = db.create_subscription(tg_id, node["code"], plan["days"], plan["code"], source="api", traffic_limit=limit)
+    xray_manager.add_client_to_node(node, sub["uuid"], email=sub["uuid"])
+    webhooks.send("subscription.created_by_api", {
+        "tg_id": tg_id, "node": node["code"], "plan": plan["code"],
+        "subscription_uuid": sub["uuid"], "expires_at": sub["expires_at"],
+    })
+    return _public_sub(db.get_subscription(sub["uuid"]))
+
+
+@app.get("/api/v1/subscriptions/{sub_uuid}")
+def public_get_subscription(sub_uuid: str, request: Request):
+    require_api_token(request)
+    sub = db.get_subscription(sub_uuid)
+    if not sub:
+        raise HTTPException(404, "not found")
+    return _public_sub(sub)
+
+
+@app.get("/api/v1/users/{tg_id}/subscriptions")
+def public_user_subscriptions(tg_id: int, request: Request):
+    require_api_token(request)
+    return [_public_sub(s) for s in db.list_subscriptions_for_user(tg_id)]
+
+
+@app.post("/api/v1/subscriptions/{sub_uuid}/extend")
+def public_extend_subscription(sub_uuid: str, request: Request, body: dict = Body(...)):
+    require_api_token(request)
+    try:
+        days = int(body.get("days"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "days должен быть числом")
+    if days <= 0 or days > 3650:
+        raise HTTPException(400, "days от 1 до 3650")
+    if not db.get_subscription(sub_uuid):
+        raise HTTPException(404, "not found")
+    sub = db.extend_subscription(sub_uuid, days)
+    node = db.get_node(sub["node"])
+    if node:
+        xray_manager.add_client_to_node(node, sub_uuid, email=sub_uuid)
+    return _public_sub(sub)
+
+
+@app.post("/api/v1/subscriptions/{sub_uuid}/revoke")
+def public_revoke_subscription(sub_uuid: str, request: Request):
+    require_api_token(request)
+    sub = db.get_subscription(sub_uuid)
+    if not sub:
+        raise HTTPException(404, "not found")
+    node = db.get_node(sub["node"])
+    if node:
+        xray_manager.remove_client_from_node(node, sub_uuid)
+    db.revoke_subscription(sub_uuid)
+    return {"ok": True}
 
 
 @app.get("/admin/api/promos")

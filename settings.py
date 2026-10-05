@@ -43,8 +43,9 @@ def set_plan_prices(prices: dict):
 
 
 def get_payment_settings() -> dict:
-    raw = legal.read_env_vars(["PAYMENTS_ENABLED", "YOOKASSA_ENABLED", "PLATEGA_ENABLED"])
+    raw = legal.read_env_vars(["PAYMENTS_ENABLED", "YOOKASSA_ENABLED", "PLATEGA_ENABLED", "CRYPTOBOT_ENABLED"])
     return {
+        "cryptobot_enabled": _bool(raw.get("CRYPTOBOT_ENABLED"), False),
         "payments_enabled": _bool(raw.get("PAYMENTS_ENABLED"), config.PAYMENTS_ENABLED),
         "yookassa_enabled": _bool(raw.get("YOOKASSA_ENABLED"), config.YOOKASSA_ENABLED),
         "platega_enabled": _bool(raw.get("PLATEGA_ENABLED"), config.PLATEGA_ENABLED),
@@ -65,6 +66,10 @@ def platega_credentials():
         raw.get("PLATEGA_MERCHANT_ID") or config.PLATEGA_MERCHANT_ID,
         raw.get("PLATEGA_SECRET") or config.PLATEGA_SECRET,
     )
+
+
+def cryptobot_token() -> str:
+    return (legal.read_env_var("CRYPTOBOT_TOKEN", "") or "").strip()
 
 
 def get_brand_name() -> str:

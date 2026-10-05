@@ -170,5 +170,29 @@ for item in due:
     features.mark_stage_sent(item[0]["uuid"], item[0]["expires_at"])
 check("reminders are not repeated after sending", features.reminders_due() == [])
 
+created = db.create_api_token("reseller")
+check("api token has the mbs_ prefix", created["token"].startswith("mbs_"))
+check("api token verifies", db.verify_api_token(created["token"])["name"] == "reseller")
+check("wrong api token is refused", db.verify_api_token("mbs_wrong") is None)
+check("empty api token is refused", db.verify_api_token("") is None)
+check("token list never holds the token itself", all("token" not in row for row in db.list_api_tokens()))
+db.revoke_api_token(created["id"])
+check("revoked api token is refused", db.verify_api_token(created["token"]) is None)
+
+ext_user = 600
+db.get_or_create_user(ext_user, None)
+ext = db.create_subscription(ext_user, "de1", 10, "7d")
+before_exp = datetime.datetime.fromisoformat(ext["expires_at"])
+extended = db.extend_subscription(ext["uuid"], 5)
+check("extend adds days to a live subscription", datetime.datetime.fromisoformat(extended["expires_at"]) - before_exp == datetime.timedelta(days=5))
+db.revoke_subscription(ext["uuid"])
+back = db.extend_subscription(ext["uuid"], 3)
+check("extend reactivates a revoked subscription", back["active"] == 1)
+
+import payments
+check("paid statuses include cryptobot paid", "paid" in payments.PAID_STATUSES)
+check("failed statuses include cryptobot expired", "expired" in payments.FAILED_STATUSES)
+check("cryptobot has a display name", "cryptobot" in payments.PROVIDER_NAMES)
+
 print(f"RESULT pass={passed} fail={failed}")
 sys.exit(1 if failed else 0)

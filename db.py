@@ -161,6 +161,16 @@ CREATE TABLE IF NOT EXISTS sub_notices (
     PRIMARY KEY (sub_uuid, kind)
 );
 
+CREATE TABLE IF NOT EXISTS api_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    token_hash TEXT UNIQUE NOT NULL,
+    prefix TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    last_used_at TEXT,
+    revoked INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_chains_pair ON chains (entry_node, exit_node);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_chains_entry_port ON chains (entry_node, port);
 CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log (ts);
@@ -1287,3 +1297,65 @@ def set_payment_promo(payment_id: str, promo_code: str | None, original_amount: 
 def consume_promo(code: str, tg_id: int) -> bool:
     with get_conn() as conn:
         return _consume_promo(conn, code, tg_id)
+
+
+def _hash_api_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def create_api_token(name: str):
+    name = (name or "").strip()[:60]
+    if not name:
+        raise ValueError("дай токену название")
+    token = "mbs_" + secrets.token_urlsafe(32)
+    with get_conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO api_tokens (name, token_hash, prefix, created_at) VALUES (?,?,?,?)",
+            (name, _hash_api_token(token), token[:10], now_iso()),
+        )
+        token_id = cur.lastrowid
+    return {"id": token_id, "name": name, "token": token, "prefix": token[:10]}
+
+
+def list_api_tokens():
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, name, prefix, created_at, last_used_at, revoked FROM api_tokens ORDER BY id DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def revoke_api_token(token_id: int):
+    with get_conn() as conn:
+        conn.execute("UPDATE api_tokens SET revoked=1 WHERE id=?", (token_id,))
+
+
+def verify_api_token(token: str):
+    if not token:
+        return None
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id, name FROM api_tokens WHERE token_hash=? AND revoked=0", (_hash_api_token(token),)
+        ).fetchone()
+        if not row:
+            return None
+        conn.execute("UPDATE api_tokens SET last_used_at=? WHERE id=?", (now_iso(), row["id"]))
+        return dict(row)
+
+
+def extend_subscription(client_uuid: str, days: int):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM subscriptions WHERE uuid=?", (client_uuid,)).fetchone()
+        if not row:
+            return None
+        now = datetime.datetime.utcnow()
+        current = datetime.datetime.fromisoformat(row["expires_at"])
+        base = current if current > now else now
+        new_expires = (base + datetime.timedelta(days=days)).isoformat()
+        was_inactive = not row["active"]
+        conn.execute(
+            "UPDATE subscriptions SET expires_at=?, active=1 WHERE uuid=?", (new_expires, client_uuid)
+        )
+        if was_inactive and row["limit_hit_at"]:
+            conn.execute("UPDATE subscriptions SET limit_hit_at=NULL, traffic_used=0, traffic_last_raw=0 WHERE uuid=?", (client_uuid,))
+    return get_subscription(client_uuid)

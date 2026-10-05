@@ -979,6 +979,15 @@
           <div><label class="f">Секрет</label><input type="password" id="pg-secret" placeholder="secret_..."></div>
           <div style="flex:0"><label class="f">&nbsp;</label><button class="btn" onclick="savePlategaSettings()">Сохранить</button></div>
         </div>
+        <h3 style="font-size:14px;margin:24px 0 12px">Криптовалюта — CryptoBot</h3>
+        <div id="cryptobot-status" class="page-sub" style="margin-bottom:12px"></div>
+        <div class="form-row">
+          <div><label class="f">Токен Crypto Pay (из @CryptoBot, раздел Crypto Pay)</label><input type="password" id="cb-token" placeholder="12345:AA..."></div>
+          <div style="flex:0"><label class="f">&nbsp;</label><button class="btn" onclick="saveCryptobotSettings()">Проверить и сохранить</button></div>
+        </div>
+        <p class="check-hint">Панель проверит токен у CryptoBot (метод getMe) и включит оплату криптой. Счёт выставляется в рублях, оплатить можно любой монетой, которую поддерживает CryptoBot. Оплату панель подхватывает сама, проверяя счета раз в полторы минуты.</p>
+        <div id="cryptobot-result"></div>
+
         <p class="check-hint">У Platega нет публичного эндпоинта для проверки ключей без реального платежа, так что сохраняется без предварительной проверки — если ключи неверные, это будет видно по первой неудачной оплате. Применяется сразу, без рестарта.</p>
         <div id="platega-result"></div>
       </div>
@@ -1202,6 +1211,19 @@
       </div>
 
       <div class="section" style="margin-top:20px">
+        <div class="section-head"><h2>API-токены</h2></div>
+        <p class="page-sub" style="margin-bottom:16px">Для ресселлеров и своих скриптов: выдавать, продлевать и отзывать подписки по HTTP. Заголовок <code>Authorization: Bearer токен</code>, адрес <code>/api/v1/...</code> на домене подписки. Токен показывается один раз при создании.</p>
+        <div class="form-row">
+          <div><label class="f">Название токена</label><input type="text" id="api-token-name" placeholder="reseller-bot"></div>
+          <div style="flex:0"><label class="f">&nbsp;</label><button class="btn" onclick="createApiToken()">Создать токен</button></div>
+        </div>
+        <div id="api-token-result"></div>
+        <div class="table-wrap" style="margin-top:14px"><table><thead><tr>
+          <th>Название</th><th>Начало токена</th><th>Создан</th><th>Последний запрос</th><th></th>
+        </tr></thead><tbody id="api-tokens-body"></tbody></table></div>
+      </div>
+
+      <div class="section" style="margin-top:20px">
         <div class="section-head"><h2>Лимит устройств (HWID)</h2></div>
         <p class="page-sub" style="margin-bottom:16px">Ограничивает число разных устройств на одну подписку — как у Remnawave. У конкретного юзера лимит можно переопределить в его карточке, это значение — только дефолт для тех, у кого свой не задан.</p>
         <label class="check"><input type="checkbox" id="hwid-enabled"> Включить лимит устройств</label>
@@ -1314,7 +1336,7 @@ function showView(name) {
   if (name === "traffic") loadTraffic();
   if (name === "audit") loadAudit();
   if (name === "payments") { loadPayments(); loadPaymentsSettings(); }
-  if (name === "settings") { loadBrandName(); loadBotSettings(); loadAdmins(); loadTotpStatus(); loadWebhookSettings(); loadHwidSettings(); loadFeatures(); }
+  if (name === "settings") { loadBrandName(); loadBotSettings(); loadAdmins(); loadTotpStatus(); loadWebhookSettings(); loadHwidSettings(); loadFeatures(); loadApiTokens(); }
 }
 
 const COUNTRIES = [
@@ -1619,12 +1641,15 @@ async function checkPayment(id, btn) {
 }
 
 async function loadPaymentsSettings() {
-  const [legalRes, ykRes, pgRes, planRes] = await Promise.all([
+  const [legalRes, ykRes, pgRes, planRes, cbRes] = await Promise.all([
     api("/admin/api/payments/legal-settings"),
     api("/admin/api/payments/yookassa-settings"),
     api("/admin/api/payments/platega-settings"),
     api("/admin/api/payments/plan-settings"),
+    api("/admin/api/payments/cryptobot-settings"),
   ]);
+  document.getElementById("cryptobot-status").innerHTML = cbRes.enabled && cbRes.has_token
+    ? '<span class="badge ok">подключена</span>' : '<span class="badge bad">не настроена</span>';
   document.getElementById("legal-name").value = legalRes.LEGAL_NAME || "";
   document.getElementById("legal-inn").value = legalRes.LEGAL_INN || "";
   document.getElementById("legal-refund").value = legalRes.REFUND_HOURS || "24";
@@ -1695,6 +1720,20 @@ async function savePlategaSettings() {
     await api("/admin/api/payments/platega-settings", { method: "POST", body: JSON.stringify({ merchant_id, secret }) });
     result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--green)">Сохранено — бот и приём вебхуков подхватывают ключи сразу, рестарт не нужен.</p>';
     document.getElementById("pg-secret").value = "";
+    loadPaymentsSettings();
+  } catch (e) {
+    result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--red)">Не получилось: ' + esc(e.message) + '</p>';
+  }
+}
+
+async function saveCryptobotSettings() {
+  const token = document.getElementById("cb-token").value.trim();
+  const result = document.getElementById("cryptobot-result");
+  if (!token) return;
+  try {
+    await api("/admin/api/payments/cryptobot-settings", { method: "POST", body: JSON.stringify({ token }) });
+    result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--green)">Токен принят, оплата криптой включена.</p>';
+    document.getElementById("cb-token").value = "";
     loadPaymentsSettings();
   } catch (e) {
     result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--red)">Не получилось: ' + esc(e.message) + '</p>';
@@ -2144,6 +2183,38 @@ async function createGift() {
   } catch (e) {
     result.innerHTML = '<p class="page-sub" style="margin-top:12px;color:var(--red)">Не получилось: ' + esc(e.message) + '</p>';
   }
+}
+
+async function loadApiTokens() {
+  const tokens = await api("/admin/api/tokens");
+  const body = document.getElementById("api-tokens-body");
+  const active = tokens.filter((t) => !t.revoked);
+  body.innerHTML = active.length ? active.map((t) => `
+    <tr><td>${esc(t.name)}</td><td><span class="mono">${esc(t.prefix)}…</span></td>
+    <td>${fmtDate(t.created_at)}</td><td>${t.last_used_at ? fmtDate(t.last_used_at) : "ещё не использовался"}</td>
+    <td><button class="muted-btn" onclick="revokeApiToken(${t.id})">Отозвать</button></td></tr>
+  `).join("") : '<tr><td colspan="5"><div class="empty">Токенов пока нет</div></td></tr>';
+}
+
+async function createApiToken() {
+  const result = document.getElementById("api-token-result");
+  const name = document.getElementById("api-token-name").value.trim();
+  try {
+    const res = await api("/admin/api/tokens", { method: "POST", body: JSON.stringify({ name }) });
+    result.innerHTML = `<div class="code-box" style="margin-top:12px">${esc(res.token)}<button class="copy-btn" onclick="copyText('${esc(res.token)}')">Копировать</button></div><p class="check-hint">Сохрани токен сейчас, потом его не показать.</p>`;
+    document.getElementById("api-token-name").value = "";
+    loadApiTokens();
+  } catch (e) {
+    result.innerHTML = '<p class="page-sub" style="margin-top:12px;color:var(--red)">Не получилось: ' + esc(e.message) + '</p>';
+  }
+}
+
+async function revokeApiToken(id) {
+  if (!(await askConfirm("Отозвать токен? Скрипты с ним перестанут работать.", { ok: "Отозвать" }))) return;
+  try {
+    await api("/admin/api/tokens/" + id, { method: "DELETE" });
+    loadApiTokens();
+  } catch (e) { toast(e.message, "error"); }
 }
 
 function promoDiscountText(p) {
@@ -2714,6 +2785,8 @@ const AUDIT_META = {
   "user.device_delete": ["Устройство удалено", "sub"],
   "gift.create": ["Гифт-код создан", "sub"],
   "promo.create": ["Промокод создан", "sub"],
+  "token.create": ["API-токен создан", "sub"],
+  "token.revoke": ["API-токен отозван", "sub"],
   "promo.edit": ["Промокод изменён", "sub"],
   "promo.delete": ["Промокод удалён", "sub"],
   "sub.traffic_limit": ["Лимит трафика изменён", "sub"],
