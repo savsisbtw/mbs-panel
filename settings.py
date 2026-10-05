@@ -101,3 +101,42 @@ def get_referral_settings() -> dict:
 def set_referral_settings(enabled: bool, bonus_days: int):
     legal.update_env_var("REFERRAL_ENABLED", "true" if enabled else "false")
     legal.update_env_var("REFERRAL_BONUS_DAYS", str(int(bonus_days)))
+
+
+def get_features() -> dict:
+    keys = ["TRIAL_ENABLED", "TRIAL_DAYS", "TRIAL_NODE", "TRIAL_TRAFFIC_GB", "DEFAULT_TRAFFIC_GB",
+            "REMINDERS_ENABLED", "NODE_ALERTS_ENABLED"]
+    raw = legal.read_env_vars(keys)
+    trial_days = _positive_int(raw.get("TRIAL_DAYS"), 1)
+    return {
+        "trial_enabled": _bool(raw.get("TRIAL_ENABLED"), False),
+        "trial_days": trial_days if trial_days > 0 else 1,
+        "trial_node": (raw.get("TRIAL_NODE") or "").strip(),
+        "trial_traffic_gb": _positive_int(raw.get("TRIAL_TRAFFIC_GB"), 2),
+        "default_traffic_gb": _positive_int(raw.get("DEFAULT_TRAFFIC_GB"), 0),
+        "reminders_enabled": _bool(raw.get("REMINDERS_ENABLED"), True),
+        "node_alerts_enabled": _bool(raw.get("NODE_ALERTS_ENABLED"), True),
+    }
+
+
+def set_features(values: dict):
+    mapping = {
+        "trial_enabled": ("TRIAL_ENABLED", lambda v: "true" if v else "false"),
+        "trial_days": ("TRIAL_DAYS", lambda v: str(max(int(v), 1))),
+        "trial_node": ("TRIAL_NODE", lambda v: str(v or "").strip()),
+        "trial_traffic_gb": ("TRIAL_TRAFFIC_GB", lambda v: str(max(int(v), 0))),
+        "default_traffic_gb": ("DEFAULT_TRAFFIC_GB", lambda v: str(max(int(v), 0))),
+        "reminders_enabled": ("REMINDERS_ENABLED", lambda v: "true" if v else "false"),
+        "node_alerts_enabled": ("NODE_ALERTS_ENABLED", lambda v: "true" if v else "false"),
+    }
+    for key, (env_key, conv) in mapping.items():
+        if key in values:
+            legal.update_env_var(env_key, conv(values[key]))
+
+
+GB = 1024 ** 3
+
+
+def default_traffic_limit_bytes():
+    gb = get_features()["default_traffic_gb"]
+    return gb * GB if gb > 0 else None

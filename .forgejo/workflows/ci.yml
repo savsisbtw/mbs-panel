@@ -29,6 +29,9 @@ jobs:
       - name: Smoke test mbs update and mirror (manual edits on the server, url mirror, unsafe urls, rollback)
         run: bash tests/test_mbs_update.sh
 
+      - name: Test traffic limits, promo codes, trial and reminders
+        run: python tests/test_features.py
+
       - name: Smoke test install-script rendering
         env:
           BOT_TOKEN: "x"

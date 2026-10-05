@@ -84,6 +84,11 @@ AUDIT_RULES = [
     ("POST", r"^/admin/api/branding$", "settings.brand"),
     ("POST", r"^/admin/api/webhook-settings$", "settings.webhook"),
     ("POST", r"^/admin/api/hwid-settings$", "settings.hwid"),
+    ("POST", r"^/admin/api/features$", "settings.features"),
+    ("POST", r"^/admin/api/promos$", "promo.create"),
+    ("PATCH", r"^/admin/api/promos/[^/]+$", "promo.edit"),
+    ("DELETE", r"^/admin/api/promos/[^/]+$", "promo.delete"),
+    ("POST", r"^/admin/api/subscriptions/[^/]+/traffic-limit$", "sub.traffic_limit"),
     ("POST", r"^/admin/api/payments/(yookassa-settings|platega-settings|plan-settings|legal-settings)$", "settings.payments"),
 ]
 AUDIT_COMPILED = [(method, re.compile(pattern), action) for method, pattern, action in AUDIT_RULES]
@@ -369,7 +374,10 @@ def _grant_paid_subscription(payment_id: str):
     payment = db.mark_payment_paid(payment_id)
     if not payment:
         return
-    sub = db.create_subscription(payment["tg_id"], payment["node"], plan["days"], payment["plan"], source="payment")
+    sub = db.create_subscription(
+        payment["tg_id"], payment["node"], plan["days"], payment["plan"], source="payment",
+        traffic_limit=settings.default_traffic_limit_bytes(),
+    )
     xray_manager.add_client_to_node(node, sub["uuid"], email=sub["uuid"])
     user = db.get_or_create_user(payment["tg_id"], None)
     _tg_send_message(
@@ -1001,7 +1009,82 @@ def admin_reset_traffic(uuid: str, request: Request):
     if not node:
         raise HTTPException(404, "node not found")
     ok = xray_manager.reset_stats_for_node(node, uuid)
-    return {"ok": ok}
+    reactivated = db.reset_traffic_counter(uuid)
+    if reactivated:
+        xray_manager.add_client_to_node(node, uuid, email=uuid)
+    return {"ok": ok, "reactivated": reactivated}
+
+
+@app.post("/admin/api/subscriptions/{uuid}/traffic-limit")
+def admin_set_traffic_limit(uuid: str, request: Request, body: dict = Body(...)):
+    require_admin(request)
+    sub = db.get_subscription(uuid)
+    if not sub:
+        raise HTTPException(404, "not found")
+    try:
+        gb = float(body.get("gb", 0))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "gb должен быть числом")
+    if gb < 0 or gb > 100000:
+        raise HTTPException(400, "лимит от 0 до 100000 ГБ, 0 значит без лимита")
+    db.set_traffic_limit(uuid, int(gb * settings.GB) if gb > 0 else None)
+    fresh = db.get_subscription(uuid)
+    node = db.get_node(fresh["node"])
+    if fresh["active"] and not sub["active"] and node:
+        xray_manager.add_client_to_node(node, uuid, email=uuid)
+    return {"ok": True, "traffic_limit": fresh["traffic_limit"], "active": bool(fresh["active"])}
+
+
+@app.get("/admin/api/features")
+def admin_get_features(request: Request):
+    require_admin(request)
+    return settings.get_features()
+
+
+@app.post("/admin/api/features")
+def admin_set_features(request: Request, body: dict = Body(...)):
+    require_admin(request)
+    try:
+        settings.set_features(body)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "неверные значения настроек")
+    return settings.get_features()
+
+
+@app.get("/admin/api/promos")
+def admin_list_promos(request: Request):
+    require_admin(request)
+    return db.list_promos()
+
+
+@app.post("/admin/api/promos")
+def admin_create_promo(request: Request, body: dict = Body(...)):
+    require_admin(request)
+    try:
+        return db.create_promo(
+            str(body.get("code", "")), str(body.get("kind", "")), int(body.get("value", 0)),
+            int(body["max_uses"]) if body.get("max_uses") else None,
+            str(body.get("expires_at") or "") or None,
+        )
+    except (ValueError, TypeError) as e:
+        raise HTTPException(400, str(e))
+
+
+@app.patch("/admin/api/promos/{code}")
+def admin_update_promo(code: str, request: Request, body: dict = Body(...)):
+    require_admin(request)
+    if not db.get_promo(code):
+        raise HTTPException(404, "not found")
+    if "active" in body:
+        db.set_promo_active(code, bool(body["active"]))
+    return db.get_promo(code)
+
+
+@app.delete("/admin/api/promos/{code}")
+def admin_delete_promo(code: str, request: Request):
+    require_admin(request)
+    db.delete_promo(code)
+    return {"ok": True}
 
 
 @app.get("/admin/api/users")
@@ -1056,7 +1139,14 @@ def admin_grant_subscription(tg_id: int, request: Request, body: dict = Body(...
     if not node or not plan:
         raise HTTPException(400, "unknown node or plan")
     db.get_or_create_user(tg_id, None)
-    sub = db.create_subscription(tg_id, node_code, plan["days"], plan_code, source="admin")
+    limit = settings.default_traffic_limit_bytes()
+    if body.get("traffic_gb") not in (None, ""):
+        try:
+            gb = float(body["traffic_gb"])
+        except (TypeError, ValueError):
+            raise HTTPException(400, "traffic_gb должен быть числом")
+        limit = int(gb * settings.GB) if gb > 0 else None
+    sub = db.create_subscription(tg_id, node_code, plan["days"], plan_code, source="admin", traffic_limit=limit)
     xray_manager.add_client_to_node(node, sub["uuid"], email=sub["uuid"])
     webhooks.send("subscription.granted_by_admin", {
         "tg_id": tg_id, "node": node_code, "plan": plan_code,

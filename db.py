@@ -136,6 +136,31 @@ CREATE TABLE IF NOT EXISTS audit_log (
     ip TEXT
 );
 
+CREATE TABLE IF NOT EXISTS promo_codes (
+    code TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    value INTEGER NOT NULL,
+    max_uses INTEGER,
+    used_count INTEGER NOT NULL DEFAULT 0,
+    expires_at TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS promo_uses (
+    code TEXT NOT NULL,
+    tg_id INTEGER NOT NULL,
+    used_at TEXT NOT NULL,
+    PRIMARY KEY (code, tg_id)
+);
+
+CREATE TABLE IF NOT EXISTS sub_notices (
+    sub_uuid TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    sent_at TEXT NOT NULL,
+    PRIMARY KEY (sub_uuid, kind)
+);
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_chains_pair ON chains (entry_node, exit_node);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_chains_entry_port ON chains (entry_node, port);
 CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log (ts);
@@ -163,6 +188,8 @@ _NEW_USER_COLUMNS = {
     "referred_by": "INTEGER",
     "referral_rewarded": "INTEGER NOT NULL DEFAULT 0",
     "bonus_days_pending": "INTEGER NOT NULL DEFAULT 0",
+    "trial_used": "INTEGER NOT NULL DEFAULT 0",
+    "promo_pending": "TEXT",
 }
 
 _NEW_ADMIN_SESSION_COLUMNS = {
@@ -175,6 +202,15 @@ _NEW_ADMIN_COLUMNS = {
 
 _NEW_SUBSCRIPTION_COLUMNS = {
     "held_at": "TEXT",
+    "traffic_limit": "INTEGER",
+    "traffic_used": "INTEGER NOT NULL DEFAULT 0",
+    "traffic_last_raw": "INTEGER NOT NULL DEFAULT 0",
+    "limit_hit_at": "TEXT",
+}
+
+_NEW_PAYMENT_COLUMNS = {
+    "promo_code": "TEXT",
+    "original_amount": "INTEGER",
 }
 
 
@@ -202,6 +238,10 @@ def _migrate():
         for name, decl in _NEW_SUBSCRIPTION_COLUMNS.items():
             if name not in subcols:
                 conn.execute(f"ALTER TABLE subscriptions ADD COLUMN {name} {decl}")
+        pcols = {r["name"] for r in conn.execute("PRAGMA table_info(payments)").fetchall()}
+        for name, decl in _NEW_PAYMENT_COLUMNS.items():
+            if name not in pcols:
+                conn.execute(f"ALTER TABLE payments ADD COLUMN {name} {decl}")
         if needs_sort_order_backfill:
             rows = conn.execute(
                 "SELECT code FROM nodes ORDER BY (code='de1') DESC, created_at ASC"
@@ -559,7 +599,7 @@ def get_user_by_token(token: str):
         return dict(row) if row else None
 
 
-def create_subscription(tg_id: int, node: str, plan_days: int, plan_code: str, source: str = "bot", client_uuid: str | None = None):
+def create_subscription(tg_id: int, node: str, plan_days: int, plan_code: str, source: str = "bot", client_uuid: str | None = None, traffic_limit: int | None = None):
     import uuid as uuidlib
     import config
 
@@ -576,9 +616,9 @@ def create_subscription(tg_id: int, node: str, plan_days: int, plan_code: str, s
             expires += datetime.timedelta(days=pending)
             conn.execute("UPDATE users SET bonus_days_pending=0 WHERE tg_id=?", (tg_id,))
         conn.execute(
-            "INSERT INTO subscriptions (uuid, tg_id, node, plan, created_at, expires_at, active, source) "
-            "VALUES (?,?,?,?,?,?,1,?)",
-            (cid, tg_id, node, plan_code, created.isoformat(), expires.isoformat(), source),
+            "INSERT INTO subscriptions (uuid, tg_id, node, plan, created_at, expires_at, active, source, traffic_limit) "
+            "VALUES (?,?,?,?,?,?,1,?,?)",
+            (cid, tg_id, node, plan_code, created.isoformat(), expires.isoformat(), source, traffic_limit),
         )
         if is_first and urow and urow["referred_by"] and not urow["referral_rewarded"] and config.REFERRAL_ENABLED:
             conn.execute("UPDATE users SET referral_rewarded=1 WHERE tg_id=?", (tg_id,))
@@ -947,6 +987,9 @@ def mark_payment_paid(payment_id: str):
         )
         if cur.rowcount == 0:
             return None
+        row = conn.execute("SELECT tg_id, promo_code FROM payments WHERE id=?", (payment_id,)).fetchone()
+        if row and row["promo_code"]:
+            _consume_promo(conn, row["promo_code"], row["tg_id"])
     return get_payment(payment_id)
 
 
@@ -1021,3 +1064,226 @@ def delete_device(device_id: int):
 def set_user_hwid_limit(tg_id: int, limit: int | None):
     with get_conn() as conn:
         conn.execute("UPDATE users SET hwid_limit=? WHERE tg_id=?", (limit, tg_id))
+
+
+def add_traffic_sample(client_uuid: str, raw_total: int) -> int:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT traffic_used, traffic_last_raw FROM subscriptions WHERE uuid=?", (client_uuid,)
+        ).fetchone()
+        if not row:
+            return 0
+        last = row["traffic_last_raw"]
+        delta = raw_total - last if raw_total >= last else raw_total
+        used = row["traffic_used"] + max(delta, 0)
+        conn.execute(
+            "UPDATE subscriptions SET traffic_used=?, traffic_last_raw=? WHERE uuid=?",
+            (used, raw_total, client_uuid),
+        )
+        return used
+
+
+def set_traffic_limit(client_uuid: str, limit_bytes: int | None):
+    with get_conn() as conn:
+        conn.execute("UPDATE subscriptions SET traffic_limit=? WHERE uuid=?", (limit_bytes, client_uuid))
+        conn.execute(
+            "UPDATE subscriptions SET active=1, limit_hit_at=NULL "
+            "WHERE uuid=? AND limit_hit_at IS NOT NULL AND expires_at > ? "
+            "AND (traffic_limit IS NULL OR traffic_limit <= 0 OR traffic_used < traffic_limit)",
+            (client_uuid, now_iso()),
+        )
+
+
+def list_over_limit():
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM subscriptions WHERE active=1 AND traffic_limit IS NOT NULL AND traffic_limit > 0 "
+            "AND traffic_used >= traffic_limit"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def mark_limit_hit(client_uuid: str):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE subscriptions SET active=0, limit_hit_at=? WHERE uuid=? AND active=1",
+            (now_iso(), client_uuid),
+        )
+
+
+def reset_traffic_counter(client_uuid: str) -> bool:
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE subscriptions SET traffic_used=0, traffic_last_raw=0 WHERE uuid=?", (client_uuid,)
+        )
+        cur = conn.execute(
+            "UPDATE subscriptions SET active=1, limit_hit_at=NULL "
+            "WHERE uuid=? AND limit_hit_at IS NOT NULL AND expires_at > ?",
+            (client_uuid, now_iso()),
+        )
+        return cur.rowcount > 0
+
+
+def list_subscriptions_expiring(within_hours: int):
+    now = datetime.datetime.utcnow()
+    until = (now + datetime.timedelta(hours=within_hours)).isoformat()
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM subscriptions WHERE active=1 AND held_at IS NULL AND expires_at > ? AND expires_at <= ?",
+            (now.isoformat(), until),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def notice_already_sent(sub_uuid: str, kind: str) -> bool:
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT 1 FROM sub_notices WHERE sub_uuid=? AND kind=?", (sub_uuid, kind)
+        ).fetchone() is not None
+
+
+def mark_notice_sent(sub_uuid: str, kind: str):
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO sub_notices (sub_uuid, kind, sent_at) VALUES (?,?,?)",
+            (sub_uuid, kind, now_iso()),
+        )
+
+
+def claim_trial(tg_id: int) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("UPDATE users SET trial_used=1 WHERE tg_id=? AND trial_used=0", (tg_id,))
+        return cur.rowcount > 0
+
+
+def trial_available(tg_id: int) -> bool:
+    with get_conn() as conn:
+        row = conn.execute("SELECT trial_used FROM users WHERE tg_id=?", (tg_id,)).fetchone()
+        if not row or row["trial_used"]:
+            return False
+        has_sub = conn.execute("SELECT 1 FROM subscriptions WHERE tg_id=?", (tg_id,)).fetchone()
+        return has_sub is None
+
+
+PROMO_KINDS = ("percent", "fixed", "days")
+
+
+def create_promo(code: str, kind: str, value: int, max_uses: int | None = None, expires_at: str | None = None):
+    code = code.strip().upper()
+    if not code or len(code) > 40 or not all(c.isalnum() or c in "-_" for c in code):
+        raise ValueError("код: только буквы, цифры, - и _, до 40 символов")
+    if kind not in PROMO_KINDS:
+        raise ValueError("тип промокода: percent, fixed или days")
+    value = int(value)
+    if value <= 0 or (kind == "percent" and value > 100):
+        raise ValueError("значение должно быть больше нуля, для процентов не больше 100")
+    if max_uses is not None and int(max_uses) <= 0:
+        max_uses = None
+    with get_conn() as conn:
+        if conn.execute("SELECT 1 FROM promo_codes WHERE code=?", (code,)).fetchone():
+            raise ValueError("такой промокод уже есть")
+        conn.execute(
+            "INSERT INTO promo_codes (code, kind, value, max_uses, expires_at, created_at) VALUES (?,?,?,?,?,?)",
+            (code, kind, value, max_uses, expires_at or None, now_iso()),
+        )
+    return get_promo(code)
+
+
+def get_promo(code: str):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM promo_codes WHERE code=?", ((code or "").strip().upper(),)).fetchone()
+        return dict(row) if row else None
+
+
+def list_promos():
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM promo_codes ORDER BY created_at DESC").fetchall()
+        return [dict(r) for r in rows]
+
+
+def set_promo_active(code: str, active: bool):
+    with get_conn() as conn:
+        conn.execute("UPDATE promo_codes SET active=? WHERE code=?", (1 if active else 0, code.strip().upper()))
+
+
+def delete_promo(code: str):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM promo_codes WHERE code=?", (code.strip().upper(),))
+
+
+def validate_promo(code: str, tg_id: int):
+    promo = get_promo(code)
+    if not promo or not promo["active"]:
+        return None, "not_found"
+    if promo["expires_at"] and promo["expires_at"] <= now_iso():
+        return None, "expired"
+    if promo["max_uses"] is not None and promo["used_count"] >= promo["max_uses"]:
+        return None, "exhausted"
+    with get_conn() as conn:
+        used = conn.execute(
+            "SELECT 1 FROM promo_uses WHERE code=? AND tg_id=?", (promo["code"], tg_id)
+        ).fetchone()
+    if used:
+        return None, "already_used"
+    return promo, None
+
+
+def discounted_price(price: int, promo: dict | None) -> int:
+    if not promo or promo["kind"] == "days":
+        return price
+    if promo["kind"] == "percent":
+        return max(price - price * promo["value"] // 100, 0)
+    return max(price - promo["value"], 0)
+
+
+def _consume_promo(conn, code: str, tg_id: int) -> bool:
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO promo_uses (code, tg_id, used_at) VALUES (?,?,?)", (code, tg_id, now_iso())
+    )
+    if cur.rowcount == 0:
+        return False
+    conn.execute("UPDATE promo_codes SET used_count=used_count+1 WHERE code=?", (code,))
+    return True
+
+
+def redeem_days_promo(code: str, tg_id: int):
+    promo, err = validate_promo(code, tg_id)
+    if err:
+        return None, err
+    if promo["kind"] != "days":
+        return None, "not_days"
+    with get_conn() as conn:
+        if not _consume_promo(conn, promo["code"], tg_id):
+            return None, "already_used"
+        _apply_bonus_days(conn, tg_id, promo["value"])
+    return promo, None
+
+
+def set_promo_pending(tg_id: int, code: str | None):
+    with get_conn() as conn:
+        conn.execute("UPDATE users SET promo_pending=? WHERE tg_id=?", (code, tg_id))
+
+
+def get_pending_promo(tg_id: int):
+    with get_conn() as conn:
+        row = conn.execute("SELECT promo_pending FROM users WHERE tg_id=?", (tg_id,)).fetchone()
+    if not row or not row["promo_pending"]:
+        return None
+    promo, err = validate_promo(row["promo_pending"], tg_id)
+    if err:
+        set_promo_pending(tg_id, None)
+        return None
+    return promo
+
+
+def set_payment_promo(payment_id: str, promo_code: str | None, original_amount: int | None):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE payments SET promo_code=?, original_amount=? WHERE id=?",
+            (promo_code, original_amount, payment_id),
+        )
+
+
+def consume_promo(code: str, tg_id: int) -> bool:
+    with get_conn() as conn:
+        return _consume_promo(conn, code, tg_id)

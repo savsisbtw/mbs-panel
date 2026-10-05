@@ -2,12 +2,14 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import CommandStart, CommandObject
+from aiogram.filters import Command, CommandStart, CommandObject
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
+import chains
 import db
+import features
 import payments
 import settings
 import webhooks
@@ -30,9 +32,13 @@ def is_admin(tg_id: int) -> bool:
 
 
 def main_menu_kb(tg_id: int) -> InlineKeyboardMarkup:
-    rows = [
+    rows = []
+    if settings.get_features()["trial_enabled"] and db.trial_available(tg_id):
+        rows.append([InlineKeyboardButton(text="Попробовать бесплатно", callback_data="trial:start")])
+    rows += [
         [InlineKeyboardButton(text="Получить VPN", callback_data="menu:get")],
         [InlineKeyboardButton(text="Моя подписка", callback_data="menu:mysub")],
+        [InlineKeyboardButton(text="Промокод", callback_data="menu:promo")],
         [InlineKeyboardButton(text="Пригласить друга", callback_data="menu:referral")],
         [InlineKeyboardButton(text="О сервисе", callback_data="menu:about")],
     ]
@@ -57,11 +63,16 @@ def nodes_kb(prefix: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def plans_kb(prefix: str, node_code: str) -> InlineKeyboardMarkup:
+def plans_kb(prefix: str, node_code: str, tg_id: int | None = None) -> InlineKeyboardMarkup:
     payments_enabled = settings.get_payment_settings()["payments_enabled"]
+    promo = db.get_pending_promo(tg_id) if tg_id else None
     rows = []
     for p in settings.get_plans():
-        label = f"{p['label']} — {p['price']} ₽" if payments_enabled and p["price"] > 0 else p["label"]
+        if payments_enabled and p["price"] > 0:
+            final = db.discounted_price(p["price"], promo)
+            label = f"{p['label']} — {final} ₽" if final == p["price"] else f"{p['label']} — {final} ₽ (было {p['price']})"
+        else:
+            label = p["label"]
         rows.append([InlineKeyboardButton(text=label, callback_data=f"{prefix}:{node_code}:{p['code']}")])
     rows.append([InlineKeyboardButton(text="Назад", callback_data="menu:get")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -190,7 +201,7 @@ async def cb_get(cb: CallbackQuery):
 @dp.callback_query(F.data.startswith("node:"))
 async def cb_node(cb: CallbackQuery):
     node_code = cb.data.split(":")[1]
-    await cb.message.edit_text("Выбери срок:", reply_markup=plans_kb("plan", node_code))
+    await cb.message.edit_text("Выбери срок:", reply_markup=plans_kb("plan", node_code, cb.from_user.id))
     await cb.answer()
 
 
@@ -208,15 +219,24 @@ async def cb_plan(cb: CallbackQuery):
     plan = settings.get_plans_by_code()[plan_code]
     db.get_or_create_user(cb.from_user.id, cb.from_user.username)
 
-    if settings.get_payment_settings()["payments_enabled"] and plan["price"] > 0 and payments.available_providers():
+    promo = db.get_pending_promo(cb.from_user.id)
+    final_price = db.discounted_price(plan["price"], promo)
+    if settings.get_payment_settings()["payments_enabled"] and final_price > 0 and payments.available_providers():
+        price_line = f"{final_price} ₽" if final_price == plan["price"] else f"{final_price} ₽ (скидка по промокоду {promo['code']})"
         await cb.message.edit_text(
-            f"<b>{plan['label']}</b> — {plan['price']} ₽\n\nВыбери способ оплаты:",
+            f"<b>{plan['label']}</b> — {price_line}\n\nВыбери способ оплаты:",
             reply_markup=providers_kb(node_code, plan_code),
         )
         return await cb.answer()
+    if promo and settings.get_payment_settings()["payments_enabled"] and plan["price"] > 0 and final_price == 0:
+        db.consume_promo(promo["code"], cb.from_user.id)
+        db.set_promo_pending(cb.from_user.id, None)
 
     user = db.get_or_create_user(cb.from_user.id, cb.from_user.username)
-    sub = db.create_subscription(cb.from_user.id, node_code, plan["days"], plan_code, source="bot")
+    sub = db.create_subscription(
+        cb.from_user.id, node_code, plan["days"], plan_code, source="bot",
+        traffic_limit=settings.default_traffic_limit_bytes(),
+    )
     node_row = db.get_node(node_code)
     await asyncio.to_thread(xray_manager.add_client_to_node, node_row, sub["uuid"], email=sub["uuid"])
     kb = connect_kb(user["token"], extra_rows=[
@@ -240,10 +260,15 @@ async def cb_pay(cb: CallbackQuery):
     plan = settings.get_plans_by_code()[plan_code]
     node_row = db.get_node(node_code)
     payment_id = payments.new_payment_id()
-    db.create_payment(payment_id, cb.from_user.id, node_code, plan_code, provider, plan["price"])
+    promo = db.get_pending_promo(cb.from_user.id)
+    final_price = db.discounted_price(plan["price"], promo)
+    db.create_payment(payment_id, cb.from_user.id, node_code, plan_code, provider, final_price)
+    if promo and final_price != plan["price"]:
+        db.set_payment_promo(payment_id, promo["code"], plan["price"])
+        db.set_promo_pending(cb.from_user.id, None)
     try:
         external_id, pay_url = payments.create_payment_link(
-            provider, payment_id, plan["price"], f"{settings.get_brand_name()} — {node_row['label']}, {plan['label']}",
+            provider, payment_id, final_price, f"{settings.get_brand_name()} — {node_row['label']}, {plan['label']}",
         )
     except Exception:
         log.exception("payment creation failed")
@@ -255,7 +280,7 @@ async def cb_pay(cb: CallbackQuery):
         [InlineKeyboardButton(text="Назад", callback_data=f"plan:{node_code}:{plan_code}")],
     ])
     await cb.message.edit_text(
-        f"Счёт на {plan['price']} ₽ создан.\nПосле оплаты подписка выдастся автоматически.",
+        f"Счёт на {final_price} ₽ создан.\nПосле оплаты подписка выдастся автоматически.",
         reply_markup=kb,
     )
     await cb.answer()
@@ -276,7 +301,7 @@ async def cb_mysub(cb: CallbackQuery):
         plan = plans_by_code.get(s["plan"], {}).get("label", s["plan"])
         node_info = nodes_by_code.get(s["node"])
         node = node_info["label"] if node_info else s["node"]
-        lines.append(f"{node} — {plan}, до {s['expires_at'][:10]}")
+        lines.append(f"{node} — {plan}, до {s['expires_at'][:10]}\nТрафик: {features.traffic_text(s)}")
     lines.append(f"\n{DIVIDER}\nСсылка-подписка:\n<code>{sub_url_for(user['token'])}</code>")
     kb = connect_kb(user["token"], extra_rows=[[InlineKeyboardButton(text="В меню", callback_data="menu:main")]])
     await cb.message.edit_text("\n".join(lines), reply_markup=kb)
@@ -368,6 +393,140 @@ async def cb_admin_sync(cb: CallbackQuery):
     await cb.answer()
 
 
+@dp.callback_query(F.data == "trial:start")
+async def cb_trial(cb: CallbackQuery):
+    feats = settings.get_features()
+    user = db.get_or_create_user(cb.from_user.id, cb.from_user.username)
+    if not feats["trial_enabled"] or not db.trial_available(cb.from_user.id):
+        return await cb.answer("Пробный период недоступен", show_alert=True)
+    node_row = features.pick_trial_node()
+    if not node_row:
+        return await cb.answer("Сейчас нет доступных серверов", show_alert=True)
+    if not db.claim_trial(cb.from_user.id):
+        return await cb.answer("Пробный период уже использован", show_alert=True)
+    limit = feats["trial_traffic_gb"] * settings.GB if feats["trial_traffic_gb"] > 0 else None
+    sub = db.create_subscription(
+        cb.from_user.id, node_row["code"], feats["trial_days"], "trial", source="trial", traffic_limit=limit,
+    )
+    await asyncio.to_thread(xray_manager.add_client_to_node, node_row, sub["uuid"], email=sub["uuid"])
+    traffic_line = f"\nТрафик: до {feats['trial_traffic_gb']} ГБ" if limit else ""
+    kb = connect_kb(user["token"], extra_rows=[[InlineKeyboardButton(text="В меню", callback_data="menu:main")]])
+    await cb.message.edit_text(
+        f"<b>Пробный период активен</b>\n\n"
+        f"Сервер: {node_row['label']}\n"
+        f"Срок: до {sub['expires_at'][:10]}{traffic_line}\n\n"
+        f"{DIVIDER}\n"
+        f"Ссылка-подписка:\n<code>{sub_url_for(user['token'])}</code>",
+        reply_markup=kb,
+    )
+    await cb.answer("Пробный период выдан")
+    await asyncio.to_thread(webhooks.send, "subscription.trial", {
+        "tg_id": cb.from_user.id, "node": node_row["code"], "subscription_uuid": sub["uuid"],
+        "expires_at": sub["expires_at"],
+    })
+
+
+PROMO_ERRORS = {
+    "not_found": "Такого промокода нет.",
+    "expired": "Срок действия промокода закончился.",
+    "exhausted": "Этот промокод уже использован максимальное число раз.",
+    "already_used": "Ты уже использовал этот промокод.",
+}
+
+
+async def apply_promo_code(message: Message, raw_code: str):
+    code = (raw_code or "").strip()
+    if not code:
+        return await message.answer("Напиши промокод так: /promo КОД")
+    db.get_or_create_user(message.from_user.id, message.from_user.username)
+    promo, err = db.validate_promo(code, message.from_user.id)
+    if err:
+        return await message.answer(PROMO_ERRORS.get(err, "Промокод не подошёл."))
+    if promo["kind"] == "days":
+        redeemed, err = db.redeem_days_promo(code, message.from_user.id)
+        if err:
+            return await message.answer(PROMO_ERRORS.get(err, "Промокод не подошёл."))
+        return await message.answer(f"Промокод принят: +{promo['value']} дн. к подписке.")
+    db.set_promo_pending(message.from_user.id, promo["code"])
+    what = f"{promo['value']}%" if promo["kind"] == "percent" else f"{promo['value']} ₽"
+    await message.answer(f"Промокод принят: скидка {what}. Она применится на следующей оплате, выбери срок в меню.")
+
+
+@dp.message(Command("promo"))
+async def cmd_promo(message: Message, command: CommandObject):
+    await apply_promo_code(message, command.args or "")
+
+
+@dp.callback_query(F.data == "menu:promo")
+async def cb_promo_hint(cb: CallbackQuery):
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Назад", callback_data="menu:main")]])
+    await cb.message.edit_text("Отправь команду с кодом, например:\n<code>/promo КОД</code>", reply_markup=kb)
+    await cb.answer()
+
+
+async def notify_limit_reached(subs: list):
+    for sub in subs:
+        try:
+            await bot.send_message(
+                sub["tg_id"],
+                "<b>Лимит трафика исчерпан</b>\n\nДоступ приостановлен. Продли подписку или напиши в поддержку, "
+                "чтобы получить ещё трафик.",
+            )
+        except Exception:
+            log.exception("failed to notify about traffic limit")
+        await asyncio.to_thread(webhooks.send, "subscription.limit_reached", {
+            "tg_id": sub["tg_id"], "subscription_uuid": sub["uuid"], "node": sub["node"],
+            "limit": sub["traffic_limit"], "used": sub["traffic_used"],
+        })
+
+
+async def send_expiry_reminders():
+    if not settings.get_features()["reminders_enabled"]:
+        return
+    for sub, kind, stage in features.reminders_due():
+        left = "3 дня" if stage == "3d" else "сутки"
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Продлить", callback_data="menu:get")]])
+        try:
+            await bot.send_message(
+                sub["tg_id"],
+                f"<b>Подписка скоро закончится</b>\n\nДо конца осталось меньше чем {left} "
+                f"(до {sub['expires_at'][:10]}). Продли заранее, чтобы доступ не прерывался.",
+                reply_markup=kb,
+            )
+        except Exception:
+            log.exception("failed to send expiry reminder")
+        features.mark_stage_sent(sub["uuid"], sub["expires_at"])
+
+
+_node_state: dict = {}
+
+
+async def check_nodes_and_alert():
+    if not settings.get_features()["node_alerts_enabled"]:
+        return
+    for node in db.list_nodes(enabled_only=True):
+        if node["kind"] == "local" or node["status"] != "active" or not node.get("address"):
+            continue
+        samples = await asyncio.to_thread(chains.tcp_connect_ms, node["address"], node["port"], 2, 3.0)
+        alive = chains.median_ms(samples) is not None
+        previous = _node_state.get(node["code"])
+        _node_state[node["code"]] = alive
+        if previous is None or previous == alive:
+            continue
+        text = (
+            f"Нода «{node['label']}» ({node['address']}) снова доступна."
+            if alive else f"Нода «{node['label']}» ({node['address']}) не отвечает."
+        )
+        for admin_id in ADMIN_IDS:
+            try:
+                await bot.send_message(admin_id, text)
+            except Exception:
+                log.exception("failed to send node alert")
+        await asyncio.to_thread(webhooks.send, "node.up" if alive else "node.down", {
+            "node": node["code"], "label": node["label"], "address": node["address"],
+        })
+
+
 async def reconcile_pending_payments():
     if not settings.get_payment_settings()["payments_enabled"]:
         return
@@ -388,7 +547,10 @@ async def reconcile_pending_payments():
             granted = db.mark_payment_paid(payment["id"])
             if not granted:
                 continue
-            sub = db.create_subscription(payment["tg_id"], payment["node"], plan["days"], payment["plan"], source="payment")
+            sub = db.create_subscription(
+                payment["tg_id"], payment["node"], plan["days"], payment["plan"], source="payment",
+                traffic_limit=settings.default_traffic_limit_bytes(),
+            )
             await asyncio.to_thread(xray_manager.add_client_to_node, node_row, sub["uuid"], email=sub["uuid"])
             user = db.get_or_create_user(payment["tg_id"], None)
             try:
@@ -415,11 +577,30 @@ async def reconcile_pending_payments():
 
 
 async def periodic_sync():
+    tick = 0
     while True:
+        if tick % 3 == 0:
+            try:
+                exceeded = await asyncio.to_thread(features.update_traffic_and_find_exceeded)
+                if exceeded:
+                    await notify_limit_reached(exceeded)
+            except Exception:
+                log.exception("traffic accounting failed")
         try:
             await asyncio.to_thread(xray_manager.sync_all)
         except Exception:
             log.exception("periodic sync failed")
+        if tick % 20 == 0:
+            try:
+                await send_expiry_reminders()
+            except Exception:
+                log.exception("expiry reminders failed")
+        if tick % 2 == 0:
+            try:
+                await check_nodes_and_alert()
+            except Exception:
+                log.exception("node alerts failed")
+        tick += 1
         try:
             await reconcile_pending_payments()
         except Exception:
