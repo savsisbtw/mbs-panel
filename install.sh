@@ -2,6 +2,7 @@
 set -e
 set -o pipefail
 
+LAB_URL="https://lab.savsis.xyz/savsisbtw/mbs-panel.git"
 MIRROR_URL="https://api.savsis.xyz/git/mbs-panel.git/"
 REPO_URL="https://github.com/savsisbtw/mbs-panel.git"
 APP_DIR="/opt/mbs-panel"
@@ -84,11 +85,17 @@ echo "клонируем репозиторий в $APP_DIR..."
 if [ -d "$APP_DIR/.git" ]; then
   retry git -C "$APP_DIR" pull --quiet
 else
-  if ! git clone --quiet "$MIRROR_URL" "$APP_DIR" 2>/dev/null; then
-    echo "зеркало недоступно, клонирую напрямую с GitHub..."
-    retry git clone --quiet "$REPO_URL" "$APP_DIR"
-    git -C "$APP_DIR" remote set-url origin "$MIRROR_URL"
+  if ! git clone --quiet "$LAB_URL" "$APP_DIR" 2>/dev/null; then
+    echo "lab.savsis.xyz недоступен, пробую зеркало..."
+    rm -rf "$APP_DIR"
+    if ! git clone --quiet "$MIRROR_URL" "$APP_DIR" 2>/dev/null; then
+      echo "зеркало недоступно, клонирую напрямую с GitHub..."
+      rm -rf "$APP_DIR"
+      retry git clone --quiet "$REPO_URL" "$APP_DIR"
+    fi
+    git -C "$APP_DIR" remote set-url origin "$LAB_URL"
   fi
+  git -C "$APP_DIR" remote add mirror "$MIRROR_URL" 2>/dev/null || true
   git -C "$APP_DIR" remote add github "$REPO_URL" 2>/dev/null || true
 fi
 
@@ -386,6 +393,8 @@ else API_WORKERS=$CPU_COUNT
 fi
 cp "$APP_DIR/systemd/mbs-bot.service" /etc/systemd/system/mbs-bot.service
 sed "s/__WORKERS__/$API_WORKERS/" "$APP_DIR/systemd/mbs-api.service" > /etc/systemd/system/mbs-api.service
+cp "$APP_DIR/systemd/mbs-autoupdate.service" /etc/systemd/system/mbs-autoupdate.service
+cp "$APP_DIR/systemd/mbs-autoupdate.timer" /etc/systemd/system/mbs-autoupdate.timer
 systemctl daemon-reload
 
 echo "ставим CLI mbs..."
@@ -407,6 +416,7 @@ systemctl reload nginx
 systemctl enable --now xray
 systemctl enable --now mbs-bot
 systemctl enable --now mbs-api
+systemctl enable --now mbs-autoupdate.timer
 
 sleep 2
 

@@ -1,8 +1,8 @@
 # MBS Panel
 
-[![CI](https://github.com/savsisbtw/mbs-panel/actions/workflows/ci.yml/badge.svg)](https://github.com/savsisbtw/mbs-panel/actions/workflows/ci.yml)
+[![CI](https://lab.savsis.xyz/savsisbtw/mbs-panel/actions/workflows/ci.yml/badge.svg)](https://lab.savsis.xyz/savsisbtw/mbs-panel/actions)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/savsisbtw/mbs-panel?include_prereleases)](https://github.com/savsisbtw/mbs-panel/releases)
+[![Release](https://img.shields.io/github/v/release/savsisbtw/mbs-panel?include_prereleases)](https://lab.savsis.xyz/savsisbtw/mbs-panel/releases)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![Xray-core](https://img.shields.io/badge/xray--core-latest-red)](https://github.com/XTLS/Xray-core)
 
@@ -112,10 +112,10 @@ sequenceDiagram
 Нужен чистый сервер на **Ubuntu 22.04/24.04** или **Debian 11/12**, root-доступ и три поднятых DNS A-записи (см. таблицу ниже).
 
 ```bash
-bash <(curl -Ls https://mbs.savsis.xyz/install.sh)
+bash <(curl -Ls https://lab.savsis.xyz/savsisbtw/mbs-panel/raw/branch/main/install.sh)
 ```
 
-(или напрямую с GitHub, если так удобнее: `git clone https://github.com/savsisbtw/mbs-panel.git && cd mbs-panel && sudo bash install.sh` — скрипт один и тот же, `mbs.savsis.xyz` просто зеркало с автосинком)
+(или так: `git clone https://lab.savsis.xyz/savsisbtw/mbs-panel.git && cd mbs-panel && sudo bash install.sh`. Основной репозиторий лежит на lab.savsis.xyz, GitHub и api.savsis.xyz остаются зеркалами на случай, если lab недоступен, установщик и `mbs update` сами переключаются на них)
 
 Скрипт спросит домен панели, домен подписки, токен бота от [@BotFather](https://t.me/BotFather) и список Telegram ID админов — и дальше всё сам: ставит зависимости, Xray, nginx, выпускает сертификаты Let's Encrypt, генерирует Reality-ключи, поднимает systemd-сервисы, настраивает firewall (ufw) и fail2ban. В конце покажет пароль от админки и ссылку на панель.
 
@@ -163,7 +163,7 @@ mbs mirror [ссылка|off] показать / запомнить / убрат
 
 Если на сервере правили файлы руками (бывает, `bot.py`/`config.py`/`db.py` под себя), обновление больше на этом не падает: правки откладываются в `git stash` и сохраняются патчем в `local-changes/local-changes-<время>.patch`, потом подтягивается новая версия. Вернуть своё поверх новой: `git stash pop` (может быть конфликт, если новая версия правила те же строки, тогда смотри патч). Если новый код не прошёл проверку или сервисы не поднялись, откат на старый коммит возвращает и твои правки.
 
-Источники по порядку: своё зеркало (если задано через `mbs mirror`), потом `api.savsis.xyz`, потом GitHub. Появилось новое зеркало или GitHub недоступен, а ссылка на репо есть: `mbs update https://example.com/путь/mbs-panel.git` возьмёт обновление именно оттуда, один раз. Чтобы всегда обновляться с него: `mbs mirror https://example.com/путь/mbs-panel.git` (убрать: `mbs mirror off`). Принимаются только `https://`, `http://`, `ssh://` и `git@хост:путь`, всё остальное (в том числе `file://` и хитрые транспорты типа `ext::`) отбрасывается, ветка берётся `main`.
+Источники по порядку: своё зеркало (если задано через `mbs mirror`), потом `lab.savsis.xyz`, потом `api.savsis.xyz`, потом GitHub. Установщик включает автообновление: каждый день около 04:00 сервер сам делает `mbs update` (перед ним всегда резервная копия). Выключить: `mbs autoupdate off`, включить обратно: `mbs autoupdate on`. Появилось новое зеркало или GitHub недоступен, а ссылка на репо есть: `mbs update https://example.com/путь/mbs-panel.git` возьмёт обновление именно оттуда, один раз. Чтобы всегда обновляться с него: `mbs mirror https://example.com/путь/mbs-panel.git` (убрать: `mbs mirror off`). Принимаются только `https://`, `http://`, `ssh://` и `git@хост:путь`, всё остальное (в том числе `file://` и хитрые транспорты типа `ext::`) отбрасывается, ветка берётся `main`.
 
 ## Добавление ноды
 

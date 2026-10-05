@@ -14,9 +14,10 @@ mbs — управление MBS Panel
   mbs logs [bot|api|xray]   последние строки лога (по умолчанию api)
   mbs domain                показать текущий домен панели
   mbs backup                полная копия панели (база, .env, ручные правки, конфиг Xray) в /root/mbs-backups
-  mbs update [ссылка]       обновить код и перезапустить (не трогает .env и базу, перед этим сам делает копию). Без ссылки: своё зеркало -> api.savsis.xyz -> GitHub.
+  mbs update [ссылка]       обновить код и перезапустить (не трогает .env и базу, перед этим сам делает копию). Без ссылки: своё зеркало -> lab.savsis.xyz -> api.savsis.xyz -> GitHub.
                             Со ссылкой на git-репозиторий (зеркало) — берёт обновление оттуда, один раз
   mbs mirror [ссылка|off]   показать / запомнить / убрать своё зеркало, которое mbs update проверяет первым
+  mbs autoupdate [on|off]   включить / выключить ежедневное автообновление (04:00, перед ним всегда копия), без аргумента — показать состояние
 EOF
 }
 
@@ -179,6 +180,9 @@ cmd_update() {
       echo "источник: своё зеркало $saved"
     elif git fetch --quiet origin main 2>/dev/null; then
       target=$(git rev-parse origin/main)
+    elif git remote | grep -q '^mirror$' && git fetch --quiet mirror main 2>/dev/null; then
+      echo "lab.savsis.xyz недоступен, взял с зеркала..."
+      target=$(git rev-parse mirror/main)
     elif git remote | grep -q '^github$' && git fetch --quiet github main 2>/dev/null; then
       echo "зеркало недоступно, взял с github..."
       target=$(git rev-parse github/main)
@@ -275,6 +279,28 @@ cmd_update() {
   fi
 }
 
+cmd_autoupdate() {
+  case "$1" in
+    on)
+      systemctl enable --now mbs-autoupdate.timer
+      echo "автообновление включено: каждый день около 04:00, перед обновлением делается копия"
+      ;;
+    off)
+      systemctl disable --now mbs-autoupdate.timer
+      echo "автообновление выключено"
+      ;;
+    "")
+      if systemctl is-enabled --quiet mbs-autoupdate.timer 2>/dev/null; then
+        echo "автообновление включено"
+        systemctl list-timers mbs-autoupdate.timer --no-pager 2>/dev/null | head -n 2
+      else
+        echo "автообновление выключено (mbs autoupdate on — включить)"
+      fi
+      ;;
+    *) echo "mbs autoupdate [on|off]"; exit 1 ;;
+  esac
+}
+
 main() {
 case "$1" in
   pass) cmd_pass "$2" ;;
@@ -285,6 +311,7 @@ case "$1" in
   update) cmd_update "$2" ;;
   mirror) cmd_mirror "$2" ;;
   backup) cmd_backup ;;
+  autoupdate) cmd_autoupdate "$2" ;;
   *) usage ;;
 esac
 }
