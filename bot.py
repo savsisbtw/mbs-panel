@@ -298,7 +298,7 @@ async def cb_mysub(cb: CallbackQuery):
     nodes_by_code = {n["code"]: n for n in db.list_nodes()}
     plans_by_code = settings.get_plans_by_code()
     for s in subs:
-        plan = plans_by_code.get(s["plan"], {}).get("label", s["plan"])
+        plan = plans_by_code.get(s["plan"], {}).get("label", "Пробный" if s["plan"] == "trial" else s["plan"])
         node_info = nodes_by_code.get(s["node"])
         node = node_info["label"] if node_info else s["node"]
         lines.append(f"{node} — {plan}, до {s['expires_at'][:10]}\nТрафик: {features.traffic_text(s)}")

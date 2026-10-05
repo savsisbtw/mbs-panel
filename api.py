@@ -944,7 +944,7 @@ def admin_subscriptions(request: Request, limit: int = 200):
         out.append({
             **s,
             "node_label": node["label"] if node else s["node"],
-            "plan_label": plan["label"] if plan else s["plan"],
+            "plan_label": plan["label"] if plan else ("Пробный" if s["plan"] == "trial" else s["plan"]),
             "days_left": _days_left(s),
         })
     return out

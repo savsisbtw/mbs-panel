@@ -20,6 +20,16 @@ jobs:
       - name: Compile check all Python files
         run: python -m compileall -q .
 
+      - name: Admin panel script syntax check
+        run: |
+          python - << 'PYEOF'
+          import re
+          html = open("admin.html", encoding="utf-8").read()
+          scripts = re.findall(r"<script[^>]*>(.*?)</script>", html, re.S)
+          open("/tmp/admin_check.js", "w", encoding="utf-8").write(max(scripts, key=len))
+          PYEOF
+          node --check /tmp/admin_check.js
+
       - name: Shell syntax check
         run: |
           bash -n install.sh

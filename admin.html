@@ -619,6 +619,7 @@
     <div class="nav-item" data-view="users" onclick="showView('users')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17.5" cy="9" r="2.4"/><path d="M21 20c0-2.6-1.8-4.8-4.2-5.5"/></svg>Юзеры</div>
     <div class="nav-item" data-view="subscriptions" onclick="showView('subscriptions')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="7" y1="9" x2="17" y2="9"/><line x1="7" y1="13" x2="17" y2="13"/><line x1="7" y1="17" x2="13" y2="17"/></svg>Подписки</div>
     <div class="nav-item" data-view="gifts" onclick="showView('gifts')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="13" rx="1.5"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="12" y1="8" x2="12" y2="21"/><path d="M12 8c-1.2 0-2.3-1.3-2.3-2.6C9.7 4 10.6 3 11.6 3c1.4 0 2.4 2 .4 5"/><path d="M12 8c1.2 0 2.3-1.3 2.3-2.6C14.3 4 13.4 3 12.4 3c-1.4 0-2.4 2-.4 5"/></svg>Гифт-коды</div>
+    <div class="nav-item" data-view="promos" onclick="showView('promos')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.2"/></svg>Промокоды</div>
     <div class="nav-item" data-view="payments" onclick="showView('payments')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>Платежи</div>
     <div class="nav-label">Система</div>
     <div class="nav-item" data-view="audit" onclick="showView('audit')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12,7 12,12 15.5,14"/></svg>Журнал</div>
@@ -685,7 +686,7 @@
         <div style="flex:0;min-width:0"><a class="btn ghost" style="white-space:nowrap;padding:11px 16px" href="/admin/api/subscriptions/export.csv">Экспорт CSV</a></div>
       </div>
       <div class="table-wrap"><table><thead><tr>
-        <th>Пользователь</th><th>Сервер</th><th>Тариф</th><th>Выдана</th><th>Истекает</th><th>Статус</th><th></th>
+        <th>Пользователь</th><th>Сервер</th><th>Тариф</th><th>Выдана</th><th>Истекает</th><th>Трафик</th><th>Статус</th><th></th>
       </tr></thead><tbody id="subs-body"></tbody></table></div>
     </div>
 
@@ -703,6 +704,27 @@
       <div class="table-wrap"><table><thead><tr>
         <th>Сервер</th><th>Срок</th><th>Создан</th><th>Статус</th><th>Ссылка</th>
       </tr></thead><tbody id="gifts-body"></tbody></table></div>
+    </div>
+
+    <div id="view-promos" class="view">
+      <div class="page-title">Промокоды</div>
+      <div class="page-sub">Скидка в процентах или рублях на оплату, либо бонусные дни к подписке. Юзер вводит код в боте командой /promo</div>
+      <div class="section">
+        <div class="form-row">
+          <div><label class="f">Код</label><input type="text" id="promo-code" placeholder="SALE20"></div>
+          <div><label class="f">Тип</label><div id="promo-kind" class="dd"></div></div>
+          <div><label class="f">Значение</label><input type="text" id="promo-value" placeholder="20"></div>
+        </div>
+        <div class="form-row" style="margin-top:12px">
+          <div><label class="f">Сколько раз можно использовать (пусто — без лимита)</label><input type="text" id="promo-max" placeholder="100"></div>
+          <div><label class="f">Действует до (пусто — бессрочно)</label><input type="date" id="promo-expires"></div>
+          <div style="flex:0"><label class="f">&nbsp;</label><button class="btn" onclick="createPromo()">Создать</button></div>
+        </div>
+        <div id="promo-result"></div>
+      </div>
+      <div class="table-wrap"><table><thead><tr>
+        <th>Код</th><th>Скидка</th><th>Использовано</th><th>До</th><th>Статус</th><th></th>
+      </tr></thead><tbody id="promos-body"></tbody></table></div>
     </div>
 
     <div id="view-nodes" class="view">
@@ -1159,6 +1181,27 @@
       </div>
 
       <div class="section" style="margin-top:20px">
+        <div class="section-head"><h2>Пробный период, трафик, уведомления</h2></div>
+        <p class="page-sub" style="margin-bottom:16px">Пробный период выдаётся один раз каждому новому юзеру кнопкой в боте. Лимит трафика по умолчанию ставится на каждую новую подписку, у конкретной подписки его можно изменить в таблице подписок.</p>
+        <label class="check"><input type="checkbox" id="feat-trial-enabled"> Включить пробный период</label>
+        <div class="form-row" style="margin-top:12px">
+          <div><label class="f">Дней пробного периода</label><input type="text" id="feat-trial-days" placeholder="1"></div>
+          <div><label class="f">Трафик пробного, ГБ (0 — без лимита)</label><input type="text" id="feat-trial-gb" placeholder="2"></div>
+          <div><label class="f">Нода для пробного (код, пусто — первая рабочая)</label><input type="text" id="feat-trial-node" placeholder="de1"></div>
+        </div>
+        <div class="form-row" style="margin-top:12px">
+          <div><label class="f">Трафик на подписку по умолчанию, ГБ (0 — без лимита)</label><input type="text" id="feat-default-gb" placeholder="0"></div>
+        </div>
+        <label class="check" style="margin-top:12px"><input type="checkbox" id="feat-reminders"> Напоминать в боте об окончании подписки (за 3 дня и за сутки)</label>
+        <label class="check" style="margin-top:8px"><input type="checkbox" id="feat-node-alerts"> Писать админам в Telegram, когда нода падает или поднимается</label>
+        <div class="form-row" style="margin-top:12px">
+          <div style="flex:0"><button class="btn" onclick="saveFeatures()">Сохранить</button></div>
+        </div>
+        <p class="check-hint">Применяется сразу, без рестарта.</p>
+        <div id="feat-result"></div>
+      </div>
+
+      <div class="section" style="margin-top:20px">
         <div class="section-head"><h2>Лимит устройств (HWID)</h2></div>
         <p class="page-sub" style="margin-bottom:16px">Ограничивает число разных устройств на одну подписку — как у Remnawave. У конкретного юзера лимит можно переопределить в его карточке, это значение — только дефолт для тех, у кого свой не задан.</p>
         <label class="check"><input type="checkbox" id="hwid-enabled"> Включить лимит устройств</label>
@@ -1265,12 +1308,13 @@ function showView(name) {
   if (name === "users") loadUsers();
   if (name === "subscriptions") loadSubscriptions();
   if (name === "gifts") loadGifts();
+  if (name === "promos") loadPromos();
   if (name === "nodes") loadNodes();
   if (name === "chains") loadChains();
   if (name === "traffic") loadTraffic();
   if (name === "audit") loadAudit();
   if (name === "payments") { loadPayments(); loadPaymentsSettings(); }
-  if (name === "settings") { loadBrandName(); loadBotSettings(); loadAdmins(); loadTotpStatus(); loadWebhookSettings(); loadHwidSettings(); }
+  if (name === "settings") { loadBrandName(); loadBotSettings(); loadAdmins(); loadTotpStatus(); loadWebhookSettings(); loadHwidSettings(); loadFeatures(); }
 }
 
 const COUNTRIES = [
@@ -1443,6 +1487,15 @@ function initDropdowns() {
       if (c) document.getElementById("nm-label").value = `${flagEmoji(code)} ${c[1]}`;
     },
   });
+  DD.promoKind = createDropdown("promo-kind", {
+    options: [
+      { value: "percent", label: "Процент скидки" },
+      { value: "fixed", label: "Скидка в рублях" },
+      { value: "days", label: "Бонусные дни" },
+    ],
+    placeholder: "Тип",
+  });
+  DD.promoKind.setValue("percent");
   DD.giftNode = createDropdown("gift-node", { options: [], placeholder: "Сервер" });
   DD.giftPlan = createDropdown("gift-plan", { options: [], placeholder: "Срок" });
   DD.editCountry = createDropdown("edit-country", {
@@ -1907,15 +1960,16 @@ function renderSubsTable(subs) {
   const body = document.getElementById("subs-body");
   body.innerHTML = subs.length ? subs.map((s, i) => `
     <tr ${rowAttr(i)}><td>${s.username ? "@" + esc(s.username) : "tg" + s.tg_id}</td><td>${esc(s.node_label)}</td><td>${esc(s.plan_label)}</td>
-    <td>${fmtDate(s.created_at)}</td><td>${fmtDate(s.expires_at)}</td><td>${statusBadge(s.active, s.days_left, s.held_at)}</td>
+    <td>${fmtDate(s.created_at)}</td><td>${fmtDate(s.expires_at)}</td><td>${subTrafficCell(s)}</td><td>${statusBadge(s.active, s.days_left, s.held_at)}</td>
     <td>
       <button class="muted-btn" onclick="openUserCard(${s.tg_id}, '${esc(s.username ? '@' + s.username : 'tg' + s.tg_id)}')">Карточка</button>
+      <button class="muted-btn" onclick="setTrafficLimit('${s.uuid}', ${s.traffic_limit ? +(s.traffic_limit / 1073741824).toFixed(2) : 0})">Лимит</button>
       ${s.active ? (s.held_at
         ? `<button class="muted-btn" onclick="resumeSub('${s.uuid}')">Возобновить</button>`
         : `<button class="muted-btn" onclick="holdSub('${s.uuid}')">Пауза</button>`) : ""}
       ${s.active ? `<button class="muted-btn" onclick="revokeSub('${s.uuid}')">Отозвать</button>` : ""}
     </td></tr>
-  `).join("") : '<tr><td colspan="7"><div class="empty">Пока нет подписок</div></td></tr>';
+  `).join("") : '<tr><td colspan="8"><div class="empty">Пока нет подписок</div></td></tr>';
 }
 
 function subStatus(s) {
@@ -2090,6 +2144,160 @@ async function createGift() {
   } catch (e) {
     result.innerHTML = '<p class="page-sub" style="margin-top:12px;color:var(--red)">Не получилось: ' + esc(e.message) + '</p>';
   }
+}
+
+function promoDiscountText(p) {
+  if (p.kind === "percent") return p.value + "%";
+  if (p.kind === "fixed") return p.value + " ₽";
+  return "+" + p.value + " дн.";
+}
+
+async function loadPromos() {
+  const promos = await api("/admin/api/promos");
+  const body = document.getElementById("promos-body");
+  body.innerHTML = promos.length ? promos.map((p, i) => `
+    <tr ${rowAttr(i)}><td><span class="mono">${esc(p.code)}</span></td><td>${esc(promoDiscountText(p))}</td>
+    <td>${p.used_count}${p.max_uses ? " / " + p.max_uses : ""}</td>
+    <td>${p.expires_at ? fmtDate(p.expires_at) : "бессрочно"}</td>
+    <td>${p.active ? '<span class="badge ok">действует</span>' : '<span class="badge bad">выключен</span>'}</td>
+    <td>
+      <button class="muted-btn" onclick="togglePromo('${esc(p.code)}', ${p.active ? "false" : "true"})">${p.active ? "Выключить" : "Включить"}</button>
+      <button class="muted-btn" onclick="deletePromo('${esc(p.code)}')">Удалить</button>
+    </td></tr>
+  `).join("") : '<tr><td colspan="6"><div class="empty">Пока нет промокодов</div></td></tr>';
+}
+
+async function createPromo() {
+  const result = document.getElementById("promo-result");
+  const expires = document.getElementById("promo-expires").value;
+  const body = {
+    code: document.getElementById("promo-code").value.trim(),
+    kind: DD.promoKind.getValue(),
+    value: document.getElementById("promo-value").value.trim(),
+    max_uses: document.getElementById("promo-max").value.trim(),
+    expires_at: expires ? expires + "T23:59:59" : "",
+  };
+  try {
+    await api("/admin/api/promos", { method: "POST", body: JSON.stringify(body) });
+    result.innerHTML = "";
+    document.getElementById("promo-code").value = "";
+    document.getElementById("promo-value").value = "";
+    document.getElementById("promo-max").value = "";
+    document.getElementById("promo-expires").value = "";
+    toast("Промокод создан", "success", 1800);
+    loadPromos();
+  } catch (e) {
+    result.innerHTML = '<p class="page-sub" style="margin-top:12px;color:var(--red)">Не получилось: ' + esc(e.message) + '</p>';
+  }
+}
+
+async function togglePromo(code, active) {
+  try {
+    await api("/admin/api/promos/" + encodeURIComponent(code), { method: "PATCH", body: JSON.stringify({ active }) });
+    loadPromos();
+  } catch (e) { toast(e.message, "error"); }
+}
+
+async function deletePromo(code) {
+  if (!(await askConfirm("Удалить промокод " + code + "? Уже применённые скидки не отменятся.", { ok: "Удалить" }))) return;
+  try {
+    await api("/admin/api/promos/" + encodeURIComponent(code), { method: "DELETE" });
+    loadPromos();
+  } catch (e) { toast(e.message, "error"); }
+}
+
+async function loadFeatures() {
+  const f = await api("/admin/api/features");
+  document.getElementById("feat-trial-enabled").checked = !!f.trial_enabled;
+  document.getElementById("feat-trial-days").value = f.trial_days;
+  document.getElementById("feat-trial-gb").value = f.trial_traffic_gb;
+  document.getElementById("feat-trial-node").value = f.trial_node || "";
+  document.getElementById("feat-default-gb").value = f.default_traffic_gb;
+  document.getElementById("feat-reminders").checked = !!f.reminders_enabled;
+  document.getElementById("feat-node-alerts").checked = !!f.node_alerts_enabled;
+  document.getElementById("feat-result").innerHTML = "";
+}
+
+async function saveFeatures() {
+  const result = document.getElementById("feat-result");
+  const body = {
+    trial_enabled: document.getElementById("feat-trial-enabled").checked,
+    trial_days: document.getElementById("feat-trial-days").value.trim() || "1",
+    trial_traffic_gb: document.getElementById("feat-trial-gb").value.trim() || "0",
+    trial_node: document.getElementById("feat-trial-node").value.trim(),
+    default_traffic_gb: document.getElementById("feat-default-gb").value.trim() || "0",
+    reminders_enabled: document.getElementById("feat-reminders").checked,
+    node_alerts_enabled: document.getElementById("feat-node-alerts").checked,
+  };
+  try {
+    await api("/admin/api/features", { method: "POST", body: JSON.stringify(body) });
+    result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--green)">Сохранено, применилось сразу</p>';
+  } catch (e) {
+    result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--red)">Не получилось: ' + esc(e.message) + '</p>';
+  }
+}
+
+function askNumber(title, hint, value) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.innerHTML = `<div class="modal-card" style="max-width:420px">
+      <div class="modal-head"><h2>${esc(title)}</h2></div>
+      <p class="page-sub" style="margin:0 0 12px">${esc(hint)}</p>
+      <input type="text" id="ask-number-input" value="${esc(String(value))}">
+      <div class="modal-actions">
+        <button class="btn ghost" data-r="0">Отмена</button>
+        <button class="btn" data-r="1">Сохранить</button>
+      </div></div>`;
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add("show"));
+    const input = overlay.querySelector("#ask-number-input");
+    input.focus();
+    input.select();
+    const done = (ok) => {
+      const v = input.value.trim();
+      overlay.classList.remove("show");
+      setTimeout(() => overlay.remove(), 280);
+      document.removeEventListener("keydown", onKey);
+      resolve(ok ? v : null);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") done(false);
+      if (e.key === "Enter") done(true);
+    };
+    document.addEventListener("keydown", onKey);
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) { done(false); return; }
+      const btn = e.target.closest("[data-r]");
+      if (btn) done(btn.dataset.r === "1");
+    });
+  });
+}
+
+async function setTrafficLimit(uuid, currentGb) {
+  const v = await askNumber("Лимит трафика, ГБ", "0 — без лимита. Если подписка была остановлена из-за лимита, новое значение её включит.", currentGb);
+  if (v === null) return;
+  const gb = parseFloat(v.replace(",", "."));
+  if (isNaN(gb) || gb < 0) { toast("Нужно число, 0 или больше", "error"); return; }
+  try {
+    await api(`/admin/api/subscriptions/${uuid}/traffic-limit`, { method: "POST", body: JSON.stringify({ gb }) });
+    toast("Лимит сохранён", "success", 1800);
+    loadSubscriptions();
+  } catch (e) { toast(e.message, "error"); }
+}
+
+function fmtBytesRu(n) {
+  const units = ["Б", "КБ", "МБ", "ГБ", "ТБ"];
+  let v = n || 0, i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return (i === 0 ? Math.round(v) : v.toFixed(1)) + " " + units[i];
+}
+
+function subTrafficCell(s) {
+  const used = fmtBytesRu(s.traffic_used || 0);
+  const limit = s.traffic_limit && s.traffic_limit > 0 ? fmtBytesRu(s.traffic_limit) : "без лимита";
+  const hit = s.limit_hit_at ? ' <span class="badge bad">лимит</span>' : "";
+  return `<span class="mono" style="font-size:12px">${used} / ${limit}</span>${hit}`;
 }
 
 function copyText(t) {
@@ -2338,7 +2546,7 @@ function applyBrandName(name) {
 }
 
 const VIEW_TITLES = {
-  dashboard: "Дашборд", users: "Юзеры", subscriptions: "Подписки", gifts: "Гифт-коды", nodes: "Ноды", chains: "Цепочки",
+  dashboard: "Дашборд", users: "Юзеры", subscriptions: "Подписки", gifts: "Гифт-коды", promos: "Промокоды", nodes: "Ноды", chains: "Цепочки",
   traffic: "Трафик", payments: "Платежи", audit: "Журнал", docs: "Документация", settings: "Настройки",
 };
 
@@ -2505,6 +2713,11 @@ const AUDIT_META = {
   "user.hwid_limit": ["Лимит устройств юзера", "sub"],
   "user.device_delete": ["Устройство удалено", "sub"],
   "gift.create": ["Гифт-код создан", "sub"],
+  "promo.create": ["Промокод создан", "sub"],
+  "promo.edit": ["Промокод изменён", "sub"],
+  "promo.delete": ["Промокод удалён", "sub"],
+  "sub.traffic_limit": ["Лимит трафика изменён", "sub"],
+  "settings.features": ["Настройки пробного периода и лимитов", "sub"],
   "admin.add": ["Админ добавлен", "settings"],
   "admin.delete": ["Админ удалён", "settings"],
   "2fa.enable": ["2FA включена", "settings"],
@@ -2641,7 +2854,7 @@ function grantByTelegramId() {
 function cmdkItems() {
   const items = [];
   const nav = [
-    ["dashboard", "Дашборд"], ["users", "Юзеры"], ["subscriptions", "Подписки"], ["gifts", "Гифт-коды"], ["nodes", "Ноды"],
+    ["dashboard", "Дашборд"], ["users", "Юзеры"], ["subscriptions", "Подписки"], ["gifts", "Гифт-коды"], ["promos", "Промокоды"], ["nodes", "Ноды"],
     ["chains", "Цепочки серверов"], ["traffic", "Трафик"], ["payments", "Платежи"], ["audit", "Журнал действий"],
     ["docs", "Документация"], ["settings", "Настройки"],
   ];
