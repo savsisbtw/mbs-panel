@@ -99,6 +99,8 @@ DE1_TRANSPORTS = [
     },
 ]
 
+import json as _json
+
 PLANS = [
     {"code": "7d", "label": "7 дней", "days": 7, "price": int(env("PRICE_7D", "150"))},
     {"code": "1m", "label": "1 месяц", "days": 30, "price": int(env("PRICE_1M", "399"))},
@@ -106,7 +108,18 @@ PLANS = [
     {"code": "6m", "label": "6 месяцев", "days": 180, "price": int(env("PRICE_6M", "1799"))},
     {"code": "1y", "label": "1 год", "days": 365, "price": int(env("PRICE_1Y", "2999"))},
 ]
+_plans_raw = env("PLANS_JSON", "").strip()
+if _plans_raw:
+    _custom_plans = _json.loads(_plans_raw)
+    for _p in _custom_plans:
+        if not {"code", "label", "days", "price"} <= set(_p):
+            raise RuntimeError("PLANS_JSON: у каждого тарифа нужны code, label, days, price")
+    PLANS = _custom_plans
 PLANS_BY_CODE = {p["code"]: p for p in PLANS}
+
+ALL_NODES_MODE = env("ALL_NODES_MODE", "false").lower() == "true"
+HWID_BLOCK_REMOVED = env("HWID_BLOCK_REMOVED", "false").lower() == "true"
+ABOUT_FOOTER = env("ABOUT_FOOTER", "")
 
 PAYMENTS_ENABLED = env("PAYMENTS_ENABLED", "false").lower() == "true"
 

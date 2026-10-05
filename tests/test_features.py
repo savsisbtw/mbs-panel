@@ -310,5 +310,73 @@ check("import creates a live subscription", outcome == "created" and db.get_subs
 check("import twice does not duplicate", db.import_subscription(555, "tgguy", "de1", "aaaaaaaa-0000-0000-0000-000000000001", None, None, True) == "exists")
 check("import of an expired client is inactive", db.import_subscription(-5, "old", "de1", "aaaaaaaa-0000-0000-0000-000000000003", xui_clients[2]["expires_at"], None, True) == "inactive")
 
+import base64 as _b64
+import config
+import plugins
+
+for fn in (links.build_expired_placeholder_text, links.build_device_limit_placeholder_text, links.build_device_blocked_placeholder_text):
+    decoded = _b64.b64decode(fn()).decode().split("\n")
+    check("placeholder is two vless links", len(decoded) == 2 and all(x.startswith("vless://") for x in decoded))
+check("empty subscription list gives the expired placeholder", links.build_subscription_text([]) != "")
+
+dev_user = 800
+db.get_or_create_user(dev_user, None)
+_, ok, reason = db.add_device_if_under_limit(dev_user, "hwid-aaaaaaaaaa", 1, None, None, None)
+check("first device is accepted", ok and reason is None)
+_, ok, reason = db.add_device_if_under_limit(dev_user, "hwid-bbbbbbbbbb", 1, None, None, None)
+check("second device is refused with the limit reason", (not ok) and reason == "limit")
+dev_row = db.list_devices(dev_user)[0]
+db.delete_device(dev_row["id"], block=True)
+_, ok, reason = db.add_device_if_under_limit(dev_user, "hwid-aaaaaaaaaa", 5, None, None, None)
+check("removed device stays blocked when blocking is on", (not ok) and reason == "blocked")
+_, ok, reason = db.add_device_if_under_limit(dev_user, "hwid-bbbbbbbbbb", 5, None, None, None)
+check("another device is still accepted", ok)
+other_row = db.list_devices(dev_user)[0]
+db.delete_device(other_row["id"])
+_, ok, reason = db.add_device_if_under_limit(dev_user, "hwid-bbbbbbbbbb", 5, None, None, None)
+check("plain delete does not block", ok)
+
+db.create_node("x1", "X One", "external", "x1.test", 443, "pbk", "sid", "sni.test", "xtls-rprx-vision", shared_uuid="shared-1")
+mode_sub = db.create_subscription(dev_user, "de1", 5, "7d")
+config.ALL_NODES_MODE = False
+plain = _b64.b64decode(links.build_subscription_text(db.list_active_subscriptions(tg_id=dev_user))).decode()
+check("single node mode leaves other nodes out", "x1.test" not in plain)
+config.ALL_NODES_MODE = True
+shared = _b64.b64decode(links.build_subscription_text(db.list_active_subscriptions(tg_id=dev_user))).decode()
+check("all nodes mode lists every enabled node", "x1.test" in shared)
+check("all nodes mode keeps the local node too", mode_sub["uuid"] in shared)
+config.ALL_NODES_MODE = False
+
+rotated = db.regenerate_primary_subscription_uuid(dev_user)
+check("uuid rotation returns old and new", rotated and rotated["old_uuid"] != rotated["new_uuid"])
+check("rotated subscription keeps its owner", db.get_subscription(rotated["new_uuid"])["tg_id"] == dev_user)
+
+plan_flags = {p["code"]: p["trial"] for p in settings.get_plans()}
+check("plans carry a trial flag that is off by default", plan_flags and not any(plan_flags.values()))
+check("trial mark works once", db.mark_trial_used(dev_user) and not db.mark_trial_used(dev_user))
+
+plug_dir = os.path.join(tmp, "plug")
+os.makedirs(os.path.join(plug_dir, "custom", "templates"))
+open(os.path.join(plug_dir, "custom", "__init__.py"), "w").write(
+    "def subscription_lines(lines, subs, nodes):\n    return lines + ['vless://extra@h:1']\n"
+    "def about_footer():\n    return 'footer from custom'\n"
+)
+open(os.path.join(plug_dir, "custom", "templates", "page.html"), "w").write("custom page")
+saved = (plugins.CUSTOM_DIR, plugins.BASE_DIR, plugins._module, plugins._checked)
+plugins.CUSTOM_DIR = os.path.join(plug_dir, "custom")
+plugins.BASE_DIR = plug_dir
+plugins._module, plugins._checked = None, False
+check("plugin module loads from the custom folder", plugins.load() is not None)
+check("plugin hook output is used", plugins.call("about_footer", "") == "footer from custom")
+check("missing plugin hook falls back to the default", plugins.call("nothing_here", "dflt") == "dflt")
+check("plugin template overrides the default", plugins.template("page.html", "default") == "custom page")
+check("missing plugin template keeps the default", plugins.template("missing.html", "default") == "default")
+check("plugin can extend subscription lines", plugins.call("subscription_lines", ["a"], ["a"], [], {}) == ["a", "vless://extra@h:1"])
+plugins.CUSTOM_DIR, plugins.BASE_DIR, plugins._module, plugins._checked = saved
+plugins._module, plugins._checked = None, False
+plugins.CUSTOM_DIR = os.path.join(tmp, "no-such-folder")
+check("without a custom folder hooks do nothing", plugins.call("about_footer", "x") == "x")
+plugins.CUSTOM_DIR = saved[0]
+
 print(f"RESULT pass={passed} fail={failed}")
 sys.exit(1 if failed else 0)

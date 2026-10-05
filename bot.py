@@ -14,7 +14,8 @@ import payments
 import settings
 import webhooks
 import xray_manager
-from config import BOT_TOKEN, ADMIN_IDS, SUB_DOMAIN, SITE_DOMAIN
+import plugins
+from config import BOT_TOKEN, ADMIN_IDS, SUB_DOMAIN, SITE_DOMAIN, ALL_NODES_MODE, ABOUT_FOOTER
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("mbs-bot")
@@ -81,6 +82,10 @@ def plans_kb(prefix: str, node_code: str, tg_id: int | None = None) -> InlineKey
 DIVIDER = "───────────────"
 
 
+def locations_line(label: str) -> str:
+    return "Локации: все доступные" if ALL_NODES_MODE else f"Сервер: {label}"
+
+
 def sub_url_for(token: str) -> str:
     return f"https://{SUB_DOMAIN}/sub/{token}"
 
@@ -99,6 +104,8 @@ def about_text() -> str:
         "маскируется под обычный HTTPS-трафик, ничем не палится.\n\n"
         f"{DIVIDER}\n"
         f"Сайт: {SITE_DOMAIN}"
+        + (f"\n{ABOUT_FOOTER}" if ABOUT_FOOTER else "")
+        + plugins.call("about_footer", "")
     )
 
 
@@ -134,7 +141,7 @@ async def start_deeplink(message: Message, command: CommandObject):
         await asyncio.to_thread(xray_manager.add_client_to_node, gift_node, sub["uuid"], email=sub["uuid"])
         await message.answer(
             f"<b>Подарок активирован</b>\n\n"
-            f"Сервер: {gift_node['label']}\n"
+            f"{locations_line(gift_node['label'])}\n"
             f"Срок: {plan['label']}\n\n"
             f"{DIVIDER}\n"
             f"Ссылка-подписка:\n<code>{sub_url_for(user['token'])}</code>",
@@ -217,7 +224,14 @@ def providers_kb(node_code: str, plan_code: str) -> InlineKeyboardMarkup:
 async def cb_plan(cb: CallbackQuery):
     _, node_code, plan_code = cb.data.split(":")
     plan = settings.get_plans_by_code()[plan_code]
-    db.get_or_create_user(cb.from_user.id, cb.from_user.username)
+    current_user = db.get_or_create_user(cb.from_user.id, cb.from_user.username)
+
+    if plan.get("trial") and current_user.get("used_trial"):
+        await cb.message.edit_text(
+            "Пробный период уже был использован.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Назад", callback_data=f"node:{node_code}")]]),
+        )
+        return await cb.answer()
 
     promo = db.get_pending_promo(cb.from_user.id)
     final_price = db.discounted_price(plan["price"], promo)
@@ -233,6 +247,13 @@ async def cb_plan(cb: CallbackQuery):
         db.set_promo_pending(cb.from_user.id, None)
 
     user = db.get_or_create_user(cb.from_user.id, cb.from_user.username)
+    if plan.get("trial") and not db.mark_trial_used(cb.from_user.id):
+        await cb.message.edit_text(
+            "Пробный период уже был использован.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Назад", callback_data=f"node:{node_code}")]]),
+        )
+        return await cb.answer()
+
     sub = db.create_subscription(
         cb.from_user.id, node_code, plan["days"], plan_code, source="bot",
         traffic_limit=settings.default_traffic_limit_bytes(),
@@ -245,7 +266,7 @@ async def cb_plan(cb: CallbackQuery):
     ])
     await cb.message.edit_text(
         f"<b>Подписка активна</b>\n\n"
-        f"Сервер: {node_row['label']}\n"
+        f"{locations_line(node_row['label'])}\n"
         f"Срок: {plan['label']} — до {sub['expires_at'][:10]}\n\n"
         f"{DIVIDER}\n"
         f"Ссылка-подписка:\n<code>{sub_url_for(user['token'])}</code>",
@@ -413,7 +434,7 @@ async def cb_trial(cb: CallbackQuery):
     kb = connect_kb(user["token"], extra_rows=[[InlineKeyboardButton(text="В меню", callback_data="menu:main")]])
     await cb.message.edit_text(
         f"<b>Пробный период активен</b>\n\n"
-        f"Сервер: {node_row['label']}\n"
+        f"{locations_line(node_row['label'])}\n"
         f"Срок: до {sub['expires_at'][:10]}{traffic_line}\n\n"
         f"{DIVIDER}\n"
         f"Ссылка-подписка:\n<code>{sub_url_for(user['token'])}</code>",
@@ -565,6 +586,8 @@ async def reconcile_pending_payments():
             granted = db.mark_payment_paid(payment["id"])
             if not granted:
                 continue
+            if plan.get("trial"):
+                db.mark_trial_used(payment["tg_id"])
             sub = db.create_subscription(
                 payment["tg_id"], payment["node"], plan["days"], payment["plan"], source="payment",
                 traffic_limit=settings.default_traffic_limit_bytes(),
@@ -575,7 +598,7 @@ async def reconcile_pending_payments():
                 await bot.send_message(
                     payment["tg_id"],
                     f"<b>Оплата получена</b>\n\n"
-                    f"Сервер: {node_row['label']}\n"
+                    f"{locations_line(node_row['label'])}\n"
                     f"Срок: {plan['label']} — до {sub['expires_at'][:10]}\n\n"
                     f"Ссылка-подписка:\n{sub_url_for(user['token'])}",
                 )

@@ -1,12 +1,14 @@
 import asyncio
 import csv
 import datetime
+import html
 import io
 import json
 import os
 import re
 import secrets
 import subprocess
+import sys
 import urllib.request
 import uuid as uuidlib
 from concurrent.futures import ThreadPoolExecutor
@@ -20,10 +22,12 @@ import chains
 import db
 import features
 import importer
+import config as config_module
 import formats
 import legal
 import links
 import nodeprov
+import plugins
 import payments
 import settings
 import totp
@@ -300,9 +304,13 @@ def get_subscription(token: str, request: Request):
         brand_name = settings.get_brand_name()
         if not subs:
             _, bot_username = settings.bot_credentials()
-            return HTMLResponse(SUB_PAGE_EXPIRED_TEMPLATE.format(bot_username=bot_username, brand_name=brand_name))
+            return HTMLResponse(plugins.template("sub_expired.html", SUB_PAGE_EXPIRED_TEMPLATE).format(
+                bot_username=bot_username, brand_name=brand_name, site_domain=SITE_DOMAIN,
+            ))
         sub_url = f"https://{SUB_DOMAIN}/sub/{token}"
-        return HTMLResponse(SUB_PAGE_TEMPLATE.format(sub_url=sub_url, brand_name=brand_name))
+        return HTMLResponse(plugins.template("sub_page.html", SUB_PAGE_TEMPLATE).format(
+            sub_url=sub_url, brand_name=brand_name, site_domain=SITE_DOMAIN,
+        ))
 
     hwid_cfg = settings.get_hwid_settings()
     if hwid_cfg["enabled"]:
@@ -310,14 +318,22 @@ def get_subscription(token: str, request: Request):
         if not HWID_RE.match(hwid):
             raise HTTPException(404, "hwid required")
         limit = user["hwid_limit"] if user["hwid_limit"] is not None else hwid_cfg["fallback_limit"]
-        _, allowed = db.add_device_if_under_limit(
+        _, allowed, reason = db.add_device_if_under_limit(
             user["tg_id"], hwid, limit,
             request.headers.get("x-device-os"),
             request.headers.get("x-device-model"),
             ua,
         )
         if not allowed:
-            raise HTTPException(404, "device limit reached", headers={"x-hwid-max-devices-reached": "true"})
+            if reason == "blocked":
+                return Response(
+                    content=links.build_device_blocked_placeholder_text(), media_type="text/plain",
+                    headers={"x-hwid-blocked": "true"},
+                )
+            return Response(
+                content=links.build_device_limit_placeholder_text(), media_type="text/plain",
+                headers={"x-hwid-max-devices-reached": "true"},
+            )
 
     fmt = formats.detect_format(ua, fmt_param)
     content, media_type = formats.render(subs, fmt, request.query_params.get("ru") == "1")
@@ -387,6 +403,8 @@ def _grant_paid_subscription(payment_id: str):
     payment = db.mark_payment_paid(payment_id)
     if not payment:
         return
+    if plan.get("trial"):
+        db.mark_trial_used(payment["tg_id"])
     sub = db.create_subscription(
         payment["tg_id"], payment["node"], plan["days"], payment["plan"], source="payment",
         traffic_limit=settings.default_traffic_limit_bytes(),
@@ -396,7 +414,7 @@ def _grant_paid_subscription(payment_id: str):
     _tg_send_message(
         payment["tg_id"],
         f"<b>Оплата получена</b>\n\n"
-        f"Сервер: {node['label']}\n"
+        f"{'Локации: все доступные' if config_module.ALL_NODES_MODE else 'Сервер: ' + node['label']}\n"
         f"Срок: {plan['label']} — до {sub['expires_at'][:10]}\n\n"
         f"Ссылка-подписка:\nhttps://{SUB_DOMAIN}/sub/{user['token']}",
     )
@@ -680,7 +698,7 @@ async def platega_webhook(request: Request):
 
 @app.get("/pay/done", response_class=HTMLResponse)
 def pay_done():
-    return (
+    default = (
         "<!doctype html><html lang='ru'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
         "<title>Оплата</title></head>"
@@ -689,6 +707,16 @@ def pay_done():
         "<div><h2>Спасибо!</h2><p>Возвращайся в Telegram — подписка придёт туда автоматически "
         "в течение минуты после подтверждения оплаты.</p></div></body></html>"
     )
+    return plugins.template("pay_done.html", default).replace("{{BRAND_NAME}}", html.escape(settings.get_brand_name()))
+
+
+@app.get("/favicon.svg")
+@app.get("/favicon.ico")
+def favicon():
+    path = plugins.site_path("favicon.svg", os.path.join(BASE_DIR, "site"))
+    if not os.path.isfile(path):
+        raise HTTPException(404, "not found")
+    return FileResponse(path, media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=86400"})
 
 
 @app.post("/nodes/register/{token}")
@@ -1448,7 +1476,14 @@ def admin_list_devices(tg_id: int, request: Request):
 @app.delete("/admin/api/users/{tg_id}/devices/{device_id}")
 def admin_delete_device(tg_id: int, device_id: int, request: Request):
     require_admin(request)
-    db.delete_device(device_id)
+    db.delete_device(device_id, block=config_module.HWID_BLOCK_REMOVED)
+    if config_module.HWID_BLOCK_REMOVED:
+        active = db.list_active_subscriptions(tg_id=tg_id)
+        node = db.get_node(active[0]["node"]) if active else None
+        rotated = db.regenerate_primary_subscription_uuid(tg_id)
+        if rotated and node:
+            xray_manager.remove_client_from_node(node, rotated["old_uuid"])
+            xray_manager.add_client_to_node(node, rotated["new_uuid"], email=rotated["new_uuid"])
     return {"ok": True}
 
 
@@ -1948,3 +1983,6 @@ def admin_set_branding(request: Request, body: dict = Body(...)):
         raise HTTPException(400, "слишком длинное название")
     _update_env_var("BRAND_NAME", brand_name)
     return {"brand_name": settings.get_brand_name()}
+
+
+plugins.call("register", None, app, sys.modules[__name__])

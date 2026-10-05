@@ -7,6 +7,7 @@ import contextlib
 import time
 
 import chains
+import config
 from config import XRAY_CONFIG_PATH
 
 _LOCK_PATH = XRAY_CONFIG_PATH + ".lock"
@@ -146,7 +147,7 @@ def _node_usable(node):
 def desired_state(node):
     import db as dbmod
 
-    active = dbmod.list_active_subscriptions(node=node["code"])
+    active = dbmod.list_active_subscriptions(node=None if config.ALL_NODES_MODE else node["code"])
     wanted = {s["uuid"]: s["uuid"] for s in active}
     nodes_by_code = {n["code"]: n for n in dbmod.list_nodes()}
     entry_chains = []
@@ -273,7 +274,37 @@ def probe_from_node(node: dict, host: str, port: int):
     raise ValueError("нода не под управлением панели, замерить с неё нельзя")
 
 
+def _each_node_for(node: dict):
+    if not config.ALL_NODES_MODE:
+        return [node]
+    import db as dbmod
+
+    return [n for n in dbmod.list_nodes(enabled_only=True) if n["kind"] in ("local", "managed")]
+
+
 def add_client_to_node(node: dict, client_uuid: str, email: str):
+    targets = _each_node_for(node)
+    if len(targets) == 1 and targets[0] is node:
+        return _add_client_to_one_node(node, client_uuid, email)
+    for target in targets:
+        try:
+            _add_client_to_one_node(target, client_uuid, email)
+        except Exception:
+            pass
+
+
+def remove_client_from_node(node: dict, client_uuid: str):
+    targets = _each_node_for(node)
+    if len(targets) == 1 and targets[0] is node:
+        return _remove_client_from_one_node(node, client_uuid)
+    for target in targets:
+        try:
+            _remove_client_from_one_node(target, client_uuid)
+        except Exception:
+            pass
+
+
+def _add_client_to_one_node(node: dict, client_uuid: str, email: str):
     if node["kind"] == "local":
         add_client(client_uuid, email)
     elif node["kind"] == "managed":
@@ -281,7 +312,7 @@ def add_client_to_node(node: dict, client_uuid: str, email: str):
         nodeprov.remote_add_client(node, client_uuid, email)
 
 
-def remove_client_from_node(node: dict, client_uuid: str):
+def _remove_client_from_one_node(node: dict, client_uuid: str):
     if node["kind"] == "local":
         remove_client(client_uuid)
     elif node["kind"] == "managed":
@@ -374,7 +405,7 @@ def sync_all():
         if node["kind"] == "local":
             results[node["code"]] = sync_from_db()
         elif node["kind"] == "managed":
-            active = dbmod.list_active_subscriptions(node=node["code"])
+            active = dbmod.list_active_subscriptions(node=None if config.ALL_NODES_MODE else node["code"])
             try:
                 res = sync_node(node)
                 results[node["code"]] = {

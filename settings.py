@@ -1,7 +1,7 @@
 import config
 import legal
 
-PRICE_ENV_KEYS = {"7d": "PRICE_7D", "1m": "PRICE_1M", "3m": "PRICE_3M", "6m": "PRICE_6M", "1y": "PRICE_1Y"}
+PRICE_ENV_KEYS = {p["code"]: "PRICE_" + p["code"].upper() for p in config.PLANS}
 
 
 def _bool(raw: str, default: bool) -> bool:
@@ -28,6 +28,7 @@ def get_plans() -> list:
             "label": p["label"],
             "days": p["days"],
             "price": _positive_int(raw.get(env_key), p["price"]),
+            "trial": bool(p.get("trial", False)),
         })
     return plans
 

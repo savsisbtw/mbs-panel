@@ -9,3 +9,4 @@ venv/
 .claude/
 .update_mirror
 local-changes/
+custom/

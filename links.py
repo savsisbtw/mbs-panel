@@ -100,14 +100,55 @@ def chain_uri(client_uuid: str, entry_node: dict, chain: dict, remark: str) -> s
     )
 
 
+def _placeholder_text(first: str, second: str) -> str:
+    import uuid as uuidlib
+    from config import SITE_DOMAIN
+
+    dead_uuid = str(uuidlib.uuid4())
+    tcp = DE1_TRANSPORTS[0]
+    lines = [
+        _tcp_reality_uri(
+            dead_uuid, tcp["address"], tcp["port"], tcp["public_key"],
+            tcp["short_id"], tcp["sni"], tcp.get("flow"), first,
+        ),
+        _tcp_reality_uri(
+            dead_uuid, tcp["address"], tcp["port"], tcp["public_key"],
+            tcp["short_id"], tcp["sni"], tcp.get("flow"), second.format(site=SITE_DOMAIN),
+        ),
+    ]
+    return base64.b64encode("\n".join(lines).encode()).decode()
+
+
+def build_expired_placeholder_text() -> str:
+    return _placeholder_text("Подписка закончилась", "Продлить тут: {site}")
+
+
+def build_device_limit_placeholder_text() -> str:
+    return _placeholder_text("Превышен лимит устройств", "Очистить тут: {site}")
+
+
+def build_device_blocked_placeholder_text() -> str:
+    return _placeholder_text("Устройство отключено", "Переподключить: {site}")
+
+
 def build_subscription_text(subs: list[dict]) -> str:
     import db
+    import config
+    import plugins
+
+    if not subs:
+        return build_expired_placeholder_text()
 
     best_by_node = {}
-    for s in subs:
-        cur = best_by_node.get(s["node"])
-        if cur is None or s["expires_at"] > cur["expires_at"]:
-            best_by_node[s["node"]] = s
+    if config.ALL_NODES_MODE:
+        primary = max(subs, key=lambda s: s["expires_at"])
+        for n in db.list_nodes(enabled_only=True):
+            best_by_node[n["code"]] = primary
+    else:
+        for s in subs:
+            cur = best_by_node.get(s["node"])
+            if cur is None or s["expires_at"] > cur["expires_at"]:
+                best_by_node[s["node"]] = s
 
     nodes_by_code = {n["code"]: n for n in db.list_nodes()}
     chains_by_entry = {}
@@ -129,5 +170,6 @@ def build_subscription_text(subs: list[dict]) -> str:
             if not node["enabled"] or not exit_node or not exit_node["enabled"]:
                 continue
             lines.append(chain_uri(s["uuid"], node, chain, chain_remark(node, exit_node)))
+    lines = plugins.call("subscription_lines", lines, lines, subs, nodes_by_code)
     raw = "\n".join(lines)
     return base64.b64encode(raw.encode()).decode()

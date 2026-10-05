@@ -28,6 +28,13 @@ CREATE TABLE IF NOT EXISTS devices (
     UNIQUE(tg_id, hwid)
 );
 
+CREATE TABLE IF NOT EXISTS blocked_devices (
+    tg_id INTEGER NOT NULL,
+    hwid TEXT NOT NULL,
+    blocked_at TEXT NOT NULL,
+    PRIMARY KEY (tg_id, hwid)
+);
+
 CREATE TABLE IF NOT EXISTS subscriptions (
     uuid TEXT PRIMARY KEY,
     tg_id INTEGER NOT NULL,
@@ -207,6 +214,10 @@ _NEW_USER_COLUMNS = {
     "bonus_days_pending": "INTEGER NOT NULL DEFAULT 0",
     "trial_used": "INTEGER NOT NULL DEFAULT 0",
     "promo_pending": "TEXT",
+    "email": "TEXT",
+    "avatar_url": "TEXT",
+    "auth_source": "TEXT NOT NULL DEFAULT 'telegram'",
+    "used_trial": "INTEGER NOT NULL DEFAULT 0",
     "note": "TEXT",
 }
 
@@ -290,6 +301,9 @@ def init_db():
     with get_conn() as conn:
         conn.executescript(SCHEMA)
     _migrate()
+    import plugins
+    with get_conn() as conn:
+        plugins.call("setup_schema", None, conn)
     _seed_local_node()
     _seed_default_admin()
     for suffix in ("", "-wal", "-shm"):
@@ -656,6 +670,7 @@ def list_active_subscriptions(tg_id: int | None = None, node: str | None = None)
     if node is not None:
         q += " AND node=?"
         params.append(node)
+    q += " ORDER BY expires_at DESC"
     with get_conn() as conn:
         rows = conn.execute(q, params).fetchall()
         return [dict(r) for r in rows]
@@ -685,12 +700,12 @@ def redeem_gift_code(code: str, tg_id: int):
         row = conn.execute("SELECT * FROM gift_codes WHERE code=?", (code,)).fetchone()
         if not row:
             return None, "not_found"
-        if row["used_by"] is not None:
-            return None, "already_used"
-        conn.execute(
-            "UPDATE gift_codes SET used_by=?, used_at=? WHERE code=?",
+        cur = conn.execute(
+            "UPDATE gift_codes SET used_by=?, used_at=? WHERE code=? AND used_by IS NULL",
             (tg_id, now_iso(), code),
         )
+        if cur.rowcount == 0:
+            return None, "already_used"
         return dict(row), None
 
 
@@ -1060,23 +1075,60 @@ def add_device(tg_id: int, hwid: str, device_os: str | None, device_model: str |
 def add_device_if_under_limit(tg_id: int, hwid: str, limit: int, device_os: str | None, device_model: str | None, user_agent: str | None):
     with get_conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        if conn.execute("SELECT 1 FROM blocked_devices WHERE tg_id=? AND hwid=?", (tg_id, hwid)).fetchone():
+            return None, False, "blocked"
         existing = conn.execute("SELECT * FROM devices WHERE tg_id=? AND hwid=?", (tg_id, hwid)).fetchone()
         if existing:
-            return dict(existing), True
+            return dict(existing), True, None
         count = conn.execute("SELECT COUNT(*) c FROM devices WHERE tg_id=?", (tg_id,)).fetchone()["c"]
         if count >= limit:
-            return None, False
+            return None, False, "limit"
         conn.execute(
             "INSERT INTO devices (tg_id, hwid, device_os, device_model, user_agent, first_seen) VALUES (?,?,?,?,?,?)",
             (tg_id, hwid, device_os, device_model, user_agent, now_iso()),
         )
         row = conn.execute("SELECT * FROM devices WHERE tg_id=? AND hwid=?", (tg_id, hwid)).fetchone()
-        return dict(row), True
+        return dict(row), True, None
 
 
-def delete_device(device_id: int):
+def delete_device(device_id: int, block: bool = False):
     with get_conn() as conn:
+        row = conn.execute("SELECT * FROM devices WHERE id=?", (device_id,)).fetchone()
         conn.execute("DELETE FROM devices WHERE id=?", (device_id,))
+        if row and block:
+            conn.execute(
+                "INSERT OR REPLACE INTO blocked_devices (tg_id, hwid, blocked_at) VALUES (?,?,?)",
+                (row["tg_id"], row["hwid"], now_iso()),
+            )
+        return dict(row) if row else None
+
+
+def regenerate_primary_subscription_uuid(tg_id: int):
+    import uuid as uuidlib
+
+    subs = list_active_subscriptions(tg_id=tg_id)
+    if not subs:
+        return None
+    old_uuid = subs[0]["uuid"]
+    new_uuid = str(uuidlib.uuid4())
+    with get_conn() as conn:
+        conn.execute("UPDATE subscriptions SET uuid=? WHERE uuid=?", (new_uuid, old_uuid))
+        conn.execute("UPDATE sub_notices SET sub_uuid=? WHERE sub_uuid=?", (new_uuid, old_uuid))
+    return {"old_uuid": old_uuid, "new_uuid": new_uuid}
+
+
+def mark_trial_used(tg_id: int) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("UPDATE users SET used_trial=1 WHERE tg_id=? AND used_trial=0", (tg_id,))
+        return cur.rowcount > 0
+
+
+def list_payments_for_user(tg_id: int, limit: int = 20):
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM payments WHERE tg_id=? ORDER BY created_at DESC LIMIT ?", (tg_id, limit)
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 def set_user_hwid_limit(tg_id: int, limit: int | None):

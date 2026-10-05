@@ -71,7 +71,9 @@ def live_brand_name() -> str:
 
 
 def render(template_name: str) -> str:
-    path = os.path.join(SITE_DIR, template_name)
+    import plugins
+
+    path = plugins.site_path(template_name, SITE_DIR)
     with open(path, encoding="utf-8") as f:
         content = f.read()
 
@@ -86,6 +88,7 @@ def render(template_name: str) -> str:
         "SUPPORT_CONTACT": _field(s["SUPPORT_CONTACT"], "контакт не указан"),
         "SUPPORT_EMAIL": _field(s["SUPPORT_EMAIL"], "email не указан"),
         "BRAND_NAME": html.escape(live_brand_name()),
+        "SITE_DOMAIN": html.escape(config.SITE_DOMAIN),
     }
     for token, value in replacements.items():
         content = content.replace("{{" + token + "}}", value)
@@ -93,7 +96,9 @@ def render(template_name: str) -> str:
 
 
 def render_site_page(template_name: str) -> str:
-    path = os.path.join(SITE_DIR, template_name)
+    import plugins
+
+    path = plugins.site_path(template_name, SITE_DIR)
     with open(path, encoding="utf-8") as f:
         content = f.read()
 
