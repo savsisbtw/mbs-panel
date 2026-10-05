@@ -120,15 +120,15 @@ def _placeholder_text(first: str, second: str) -> str:
 
 
 def build_expired_placeholder_text() -> str:
-    return _placeholder_text("Подписка закончилась", "Продлить тут: {site}")
+    return _placeholder_text("❌ Подписка закончилась", "🔄 Продлить тут: {site}")
 
 
 def build_device_limit_placeholder_text() -> str:
-    return _placeholder_text("Превышен лимит устройств", "Очистить тут: {site}")
+    return _placeholder_text("❌ Превышен лимит устройств", "🔄 Очистить тут: {site}")
 
 
 def build_device_blocked_placeholder_text() -> str:
-    return _placeholder_text("Устройство отключено", "Переподключить: {site}")
+    return _placeholder_text("❌ Устройство отключено", "🔄 Переподключить: {site}")
 
 
 def build_subscription_text(subs: list[dict]) -> str:
