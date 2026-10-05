@@ -3,7 +3,7 @@ import logging
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart, CommandObject
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
@@ -498,6 +498,24 @@ async def send_expiry_reminders():
         features.mark_stage_sent(sub["uuid"], sub["expires_at"])
 
 
+async def send_scheduled_backup():
+    if not await asyncio.to_thread(features.telegram_backup_due):
+        return
+    name, data = await asyncio.to_thread(features.make_encrypted_backup)
+    sent = False
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_document(
+                admin_id, BufferedInputFile(data, filename=name),
+                caption="Резервная копия панели, зашифрована парольной фразой из настроек.",
+            )
+            sent = True
+        except Exception:
+            log.exception("failed to send backup")
+    if sent:
+        await asyncio.to_thread(features.mark_backup_done)
+
+
 _node_state: dict = {}
 
 
@@ -595,6 +613,11 @@ async def periodic_sync():
                 await send_expiry_reminders()
             except Exception:
                 log.exception("expiry reminders failed")
+        if tick % 2 == 1:
+            try:
+                await send_scheduled_backup()
+            except Exception:
+                log.exception("scheduled backup failed")
         if tick % 2 == 0:
             try:
                 await check_nodes_and_alert()

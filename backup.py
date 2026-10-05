@@ -1,4 +1,6 @@
+import base64
 import glob
+import hashlib
 import io
 import json
 import os
@@ -128,3 +130,32 @@ def restore_backup(data: bytes) -> dict:
 
     _prune_old_safety_copies()
     return {"restored_env": restored_env, "safety_copy": safety_copy}
+
+
+MAGIC = b"MBSENC1"
+
+
+def _key_from_passphrase(passphrase: str, salt: bytes) -> bytes:
+    raw = hashlib.scrypt(passphrase.encode(), salt=salt, n=2 ** 14, r=8, p=1, dklen=32)
+    return base64.urlsafe_b64encode(raw)
+
+
+def encrypt_backup(data: bytes, passphrase: str) -> bytes:
+    from cryptography.fernet import Fernet
+
+    salt = os.urandom(16)
+    token = Fernet(_key_from_passphrase(passphrase, salt)).encrypt(data)
+    return MAGIC + salt + token
+
+
+def decrypt_backup(blob: bytes, passphrase: str) -> bytes:
+    from cryptography.fernet import Fernet, InvalidToken
+
+    if not blob.startswith(MAGIC) or len(blob) < len(MAGIC) + 17:
+        raise RestoreError("это не зашифрованный бэкап панели")
+    salt = blob[len(MAGIC):len(MAGIC) + 16]
+    token = blob[len(MAGIC) + 16:]
+    try:
+        return Fernet(_key_from_passphrase(passphrase, salt)).decrypt(token)
+    except InvalidToken:
+        raise RestoreError("неверная парольная фраза или файл повреждён")

@@ -17,6 +17,7 @@ mbs — управление MBS Panel
   mbs update [ссылка]       обновить код и перезапустить (не трогает .env и базу, перед этим сам делает копию). Без ссылки: своё зеркало -> lab.savsis.xyz -> api.savsis.xyz -> GitHub.
                             Со ссылкой на git-репозиторий (зеркало) — берёт обновление оттуда, один раз
   mbs mirror [ссылка|off]   показать / запомнить / убрать своё зеркало, которое mbs update проверяет первым
+  mbs decrypt файл [куда]   расшифровать бэкап, который панель присылает в Telegram (спросит парольную фразу)
   mbs autoupdate [on|off]   включить / выключить ежедневное автообновление (04:00, перед ним всегда копия), без аргумента — показать состояние
 EOF
 }
@@ -279,6 +280,29 @@ cmd_update() {
   fi
 }
 
+cmd_decrypt() {
+  local src="$1" dst="$2" pass
+  if [ -z "$src" ] || [ ! -f "$src" ]; then
+    echo "mbs decrypt файл.enc [выходной.tar.gz]"
+    return 1
+  fi
+  [ -n "$dst" ] || dst="${src%.enc}"
+  read -r -s -p "парольная фраза: " pass
+  echo
+  MBS_SRC="$src" MBS_DST="$dst" MBS_PASS="$pass" "$APP_DIR/venv/bin/python" - << 'PYEOF'
+import os, sys
+sys.path.insert(0, os.environ.get("MBS_APP", "/opt/mbs-panel"))
+from backup import decrypt_backup, RestoreError
+try:
+    data = decrypt_backup(open(os.environ["MBS_SRC"], "rb").read(), os.environ["MBS_PASS"])
+except RestoreError as e:
+    print("ошибка:", e)
+    sys.exit(1)
+open(os.environ["MBS_DST"], "wb").write(data)
+print("готово:", os.environ["MBS_DST"])
+PYEOF
+}
+
 cmd_autoupdate() {
   case "$1" in
     on)
@@ -312,6 +336,7 @@ case "$1" in
   mirror) cmd_mirror "$2" ;;
   backup) cmd_backup ;;
   autoupdate) cmd_autoupdate "$2" ;;
+  decrypt) cmd_decrypt "$2" "$3" ;;
   *) usage ;;
 esac
 }

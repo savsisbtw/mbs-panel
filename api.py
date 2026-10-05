@@ -18,6 +18,8 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, FileResponse
 import backup
 import chains
 import db
+import features
+import formats
 import legal
 import links
 import nodeprov
@@ -85,6 +87,9 @@ AUDIT_RULES = [
     ("POST", r"^/admin/api/webhook-settings$", "settings.webhook"),
     ("POST", r"^/admin/api/hwid-settings$", "settings.hwid"),
     ("POST", r"^/admin/api/features$", "settings.features"),
+    ("POST", r"^/admin/api/subscriptions/bulk$", "sub.bulk"),
+    ("POST", r"^/admin/api/users/-?\d+/note$", "user.note"),
+    ("POST", r"^/admin/api/backup/telegram-now$", "backup.telegram"),
     ("POST", r"^/admin/api/tokens$", "token.create"),
     ("DELETE", r"^/admin/api/tokens/\d+$", "token.revoke"),
     ("POST", r"^/admin/api/promos$", "promo.create"),
@@ -288,7 +293,8 @@ def get_subscription(token: str, request: Request):
         raise HTTPException(404, "not found")
     subs = db.list_active_subscriptions(tg_id=user["tg_id"])
     ua = request.headers.get("user-agent", "")
-    if not _is_app_client(ua):
+    fmt_param = request.query_params.get("format", "")
+    if not _is_app_client(ua) and not fmt_param:
         brand_name = settings.get_brand_name()
         if not subs:
             _, bot_username = settings.bot_credentials()
@@ -311,8 +317,9 @@ def get_subscription(token: str, request: Request):
         if not allowed:
             raise HTTPException(404, "device limit reached", headers={"x-hwid-max-devices-reached": "true"})
 
-    content = links.build_subscription_text(subs)
-    return Response(content=content, media_type="text/plain")
+    fmt = formats.detect_format(ua, fmt_param)
+    content, media_type = formats.render(subs, fmt, request.query_params.get("ru") == "1")
+    return Response(content=content, media_type=media_type)
 
 
 @app.get("/api/cabinet/{token}")
@@ -913,6 +920,14 @@ def _fmt_bytes(n: int) -> str:
     return f"{v:.1f} TB"
 
 
+@app.get("/admin/api/traffic/history")
+def admin_traffic_history(request: Request, days: int = 30):
+    require_admin(request)
+    nodes_by_code = {n["code"]: n["label"] for n in db.list_nodes()}
+    history = db.traffic_history(days)
+    return {"days": history, "node_labels": nodes_by_code}
+
+
 @app.get("/admin/api/traffic")
 def admin_traffic(request: Request):
     require_admin(request)
@@ -1211,6 +1226,73 @@ def public_revoke_subscription(sub_uuid: str, request: Request):
         xray_manager.remove_client_from_node(node, sub_uuid)
     db.revoke_subscription(sub_uuid)
     return {"ok": True}
+
+
+@app.post("/admin/api/backup/passphrase")
+def admin_set_backup_passphrase(request: Request, body: dict = Body(...)):
+    require_admin(request)
+    value = str(body.get("passphrase", "")).strip()
+    if len(value) < 8:
+        raise HTTPException(400, "парольная фраза не короче 8 символов")
+    settings.set_backup_passphrase(value)
+    return {"ok": True}
+
+
+@app.post("/admin/api/backup/telegram-now")
+def admin_backup_telegram_now(request: Request):
+    require_admin(request)
+    if not settings.backup_passphrase():
+        raise HTTPException(400, "сначала задай парольную фразу для шифрования")
+    features.request_backup_now()
+    return {"ok": True}
+
+
+@app.post("/admin/api/users/{tg_id}/note")
+def admin_set_user_note(tg_id: int, request: Request, body: dict = Body(...)):
+    require_admin(request)
+    if not db.get_user(tg_id):
+        raise HTTPException(404, "not found")
+    db.set_user_note(tg_id, str(body.get("note", "")))
+    return {"ok": True}
+
+
+@app.post("/admin/api/subscriptions/bulk")
+def admin_bulk_subscriptions(request: Request, body: dict = Body(...)):
+    require_admin(request)
+    uuids = body.get("uuids")
+    action = body.get("action")
+    if not isinstance(uuids, list) or not uuids or len(uuids) > 500:
+        raise HTTPException(400, "выбери от 1 до 500 подписок")
+    if action not in ("revoke", "extend"):
+        raise HTTPException(400, "действие: revoke или extend")
+    days = 0
+    if action == "extend":
+        try:
+            days = int(body.get("days"))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "days должен быть числом")
+        if days <= 0 or days > 3650:
+            raise HTTPException(400, "days от 1 до 3650")
+    done, failed = 0, []
+    for sub_uuid in dict.fromkeys(str(u) for u in uuids):
+        sub = db.get_subscription(sub_uuid)
+        if not sub:
+            failed.append(sub_uuid)
+            continue
+        node = db.get_node(sub["node"])
+        try:
+            if action == "revoke":
+                if node:
+                    xray_manager.remove_client_from_node(node, sub_uuid)
+                db.revoke_subscription(sub_uuid)
+            else:
+                db.extend_subscription(sub_uuid, days)
+                if node:
+                    xray_manager.add_client_to_node(node, sub_uuid, email=sub_uuid)
+            done += 1
+        except Exception:
+            failed.append(sub_uuid)
+    return {"done": done, "failed": failed}
 
 
 @app.get("/admin/api/promos")

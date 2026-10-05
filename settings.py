@@ -110,7 +110,7 @@ def set_referral_settings(enabled: bool, bonus_days: int):
 
 def get_features() -> dict:
     keys = ["TRIAL_ENABLED", "TRIAL_DAYS", "TRIAL_NODE", "TRIAL_TRAFFIC_GB", "DEFAULT_TRAFFIC_GB",
-            "REMINDERS_ENABLED", "NODE_ALERTS_ENABLED"]
+            "REMINDERS_ENABLED", "NODE_ALERTS_ENABLED", "BACKUP_TG_ENABLED", "BACKUP_TG_HOURS", "BACKUP_PASSPHRASE"]
     raw = legal.read_env_vars(keys)
     trial_days = _positive_int(raw.get("TRIAL_DAYS"), 1)
     return {
@@ -121,6 +121,9 @@ def get_features() -> dict:
         "default_traffic_gb": _positive_int(raw.get("DEFAULT_TRAFFIC_GB"), 0),
         "reminders_enabled": _bool(raw.get("REMINDERS_ENABLED"), True),
         "node_alerts_enabled": _bool(raw.get("NODE_ALERTS_ENABLED"), True),
+        "backup_tg_enabled": _bool(raw.get("BACKUP_TG_ENABLED"), False),
+        "backup_tg_hours": max(_positive_int(raw.get("BACKUP_TG_HOURS"), 24), 1),
+        "backup_has_passphrase": bool((raw.get("BACKUP_PASSPHRASE") or "").strip()),
     }
 
 
@@ -133,6 +136,8 @@ def set_features(values: dict):
         "default_traffic_gb": ("DEFAULT_TRAFFIC_GB", lambda v: str(max(int(v), 0))),
         "reminders_enabled": ("REMINDERS_ENABLED", lambda v: "true" if v else "false"),
         "node_alerts_enabled": ("NODE_ALERTS_ENABLED", lambda v: "true" if v else "false"),
+        "backup_tg_enabled": ("BACKUP_TG_ENABLED", lambda v: "true" if v else "false"),
+        "backup_tg_hours": ("BACKUP_TG_HOURS", lambda v: str(max(int(v), 1))),
     }
     for key, (env_key, conv) in mapping.items():
         if key in values:
@@ -140,6 +145,14 @@ def set_features(values: dict):
 
 
 GB = 1024 ** 3
+
+
+def backup_passphrase() -> str:
+    return (legal.read_env_var("BACKUP_PASSPHRASE", "") or "").strip()
+
+
+def set_backup_passphrase(value: str):
+    legal.update_env_var("BACKUP_PASSPHRASE", value.strip())
 
 
 def default_traffic_limit_bytes():

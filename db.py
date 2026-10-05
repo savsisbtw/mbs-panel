@@ -171,6 +171,13 @@ CREATE TABLE IF NOT EXISTS api_tokens (
     revoked INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS traffic_daily (
+    day TEXT NOT NULL,
+    node TEXT NOT NULL,
+    bytes INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, node)
+);
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_chains_pair ON chains (entry_node, exit_node);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_chains_entry_port ON chains (entry_node, port);
 CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log (ts);
@@ -200,6 +207,7 @@ _NEW_USER_COLUMNS = {
     "bonus_days_pending": "INTEGER NOT NULL DEFAULT 0",
     "trial_used": "INTEGER NOT NULL DEFAULT 0",
     "promo_pending": "TEXT",
+    "note": "TEXT",
 }
 
 _NEW_ADMIN_SESSION_COLUMNS = {
@@ -901,14 +909,14 @@ def list_users(q: str = "", limit: int = 200):
     params = [now_iso(), now_iso()]
     if q:
         if q.lstrip("-").isdigit():
-            where = "WHERE u.tg_id = ? OR instr(lower(COALESCE(u.username, '')), ?) > 0"
-            params += [int(q), q.lower()]
+            where = "WHERE u.tg_id = ? OR instr(lower(COALESCE(u.username, '')), ?) > 0 OR instr(lower(COALESCE(u.note, '')), ?) > 0"
+            params += [int(q), q.lower(), q.lower()]
         else:
-            where = "WHERE instr(lower(COALESCE(u.username, '')), ?) > 0"
-            params.append(q.lower().lstrip("@"))
+            where = "WHERE instr(lower(COALESCE(u.username, '')), ?) > 0 OR instr(lower(COALESCE(u.note, '')), ?) > 0"
+            params += [q.lower().lstrip("@"), q.lower()]
     params.append(limit)
     query = (
-        "SELECT u.tg_id, u.username, u.created_at, "
+        "SELECT u.tg_id, u.username, u.created_at, u.note, "
         "(SELECT COUNT(*) FROM subscriptions s WHERE s.tg_id=u.tg_id) AS subs_total, "
         "(SELECT COUNT(*) FROM subscriptions s WHERE s.tg_id=u.tg_id AND s.active=1 AND s.held_at IS NULL AND s.expires_at > ?) AS subs_active, "
         "(SELECT MAX(s.expires_at) FROM subscriptions s WHERE s.tg_id=u.tg_id AND s.active=1 AND s.held_at IS NULL AND s.expires_at > ?) AS active_until, "
@@ -1079,13 +1087,19 @@ def set_user_hwid_limit(tg_id: int, limit: int | None):
 def add_traffic_sample(client_uuid: str, raw_total: int) -> int:
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT traffic_used, traffic_last_raw FROM subscriptions WHERE uuid=?", (client_uuid,)
+            "SELECT traffic_used, traffic_last_raw, node FROM subscriptions WHERE uuid=?", (client_uuid,)
         ).fetchone()
         if not row:
             return 0
         last = row["traffic_last_raw"]
         delta = raw_total - last if raw_total >= last else raw_total
         used = row["traffic_used"] + max(delta, 0)
+        if delta > 0:
+            conn.execute(
+                "INSERT INTO traffic_daily (day, node, bytes) VALUES (?,?,?) "
+                "ON CONFLICT(day, node) DO UPDATE SET bytes = bytes + excluded.bytes",
+                (datetime.datetime.utcnow().date().isoformat(), row["node"], delta),
+            )
         conn.execute(
             "UPDATE subscriptions SET traffic_used=?, traffic_last_raw=? WHERE uuid=?",
             (used, raw_total, client_uuid),
@@ -1359,3 +1373,29 @@ def extend_subscription(client_uuid: str, days: int):
         if was_inactive and row["limit_hit_at"]:
             conn.execute("UPDATE subscriptions SET limit_hit_at=NULL, traffic_used=0, traffic_last_raw=0 WHERE uuid=?", (client_uuid,))
     return get_subscription(client_uuid)
+
+
+def traffic_history(days: int = 30):
+    days = max(1, min(int(days), 365))
+    today = datetime.datetime.utcnow().date()
+    since = (today - datetime.timedelta(days=days - 1)).isoformat()
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT day, node, bytes FROM traffic_daily WHERE day >= ? ORDER BY day", (since,)
+        ).fetchall()
+    by_day = {}
+    for r in rows:
+        entry = by_day.setdefault(r["day"], {"day": r["day"], "total": 0, "nodes": {}})
+        entry["total"] += r["bytes"]
+        entry["nodes"][r["node"]] = r["bytes"]
+    result = []
+    for i in range(days):
+        d = (today - datetime.timedelta(days=days - 1 - i)).isoformat()
+        result.append(by_day.get(d, {"day": d, "total": 0, "nodes": {}}))
+    return result
+
+
+def set_user_note(tg_id: int, note: str | None):
+    note = (note or "").strip()[:500] or None
+    with get_conn() as conn:
+        conn.execute("UPDATE users SET note=? WHERE tg_id=?", (note, tg_id))

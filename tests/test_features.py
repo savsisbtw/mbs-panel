@@ -194,5 +194,66 @@ check("paid statuses include cryptobot paid", "paid" in payments.PAID_STATUSES)
 check("failed statuses include cryptobot expired", "expired" in payments.FAILED_STATUSES)
 check("cryptobot has a display name", "cryptobot" in payments.PROVIDER_NAMES)
 
+import json as jsonmod
+import config
+import formats
+import links
+
+sample = links._transport_uris("11111111-1111-1111-1111-111111111111", config.DE1_TRANSPORTS, "DE")
+sample.append(links.hysteria_uri_for_node(
+    {"hysteria_enabled": 1, "hysteria_password": "pw", "hysteria_obfs_password": "ob", "sni": "x.test",
+     "address": "h.test", "hysteria_port": 443}, "DE"))
+parsed = formats.parse_all(sample)
+check("all sample uris parse", len(parsed) == len(sample) and len(sample) == 5)
+clash = jsonmod.loads(formats.build_clash(sample, ru_direct=True))
+kinds = [p["type"] for p in clash["proxies"]]
+check("clash has vless and hysteria2 proxies", "vless" in kinds and "hysteria2" in kinds)
+check("clash skips xhttp which it cannot run", len(clash["proxies"]) == 4)
+reality = [p for p in clash["proxies"] if p.get("reality-opts")]
+check("clash reality proxy carries the public key", reality and reality[0]["reality-opts"]["public-key"] == "x")
+check("clash routes ru direct when asked", "GEOIP,RU,DIRECT" in clash["rules"] and clash["rules"][-1] == "MATCH,PROXY")
+check("clash without ru flag has no ru rule", "GEOIP,RU,DIRECT" not in jsonmod.loads(formats.build_clash(sample))["rules"])
+box = jsonmod.loads(formats.build_singbox(sample))
+tags = [o["tag"] for o in box["outbounds"]]
+check("singbox has a selector and urltest", "proxy" in tags and "auto" in tags and box["route"]["final"] == "proxy")
+check("singbox keeps four real outbounds", len([o for o in box["outbounds"] if o["type"] in ("vless", "hysteria2")]) == 4)
+check("detect clash by user agent", formats.detect_format("ClashMeta/1.0", "") == "clash")
+check("detect singbox by user agent", formats.detect_format("sing-box 1.9", "") == "singbox")
+check("explicit format wins", formats.detect_format("Happ/1", "clash") == "clash")
+check("default format is base64", formats.detect_format("Happ/1", "") == "base64")
+
+import backup
+
+blob = backup.encrypt_backup(b"secret archive bytes", "correct horse battery")
+check("encrypted backup hides the content", b"secret archive" not in blob and blob.startswith(backup.MAGIC))
+check("decrypt returns the original bytes", backup.decrypt_backup(blob, "correct horse battery") == b"secret archive bytes")
+try:
+    backup.decrypt_backup(blob, "wrong phrase")
+    check("wrong passphrase is refused", False)
+except backup.RestoreError:
+    check("wrong passphrase is refused", True)
+try:
+    backup.decrypt_backup(b"not a backup at all", "x")
+    check("garbage input is refused", False)
+except backup.RestoreError:
+    check("garbage input is refused", True)
+check("two encryptions of the same data differ", backup.encrypt_backup(b"a", "pppppppp") != backup.encrypt_backup(b"a", "pppppppp"))
+
+hist_sub = db.create_subscription(100, "de1", 5, "7d")
+db.add_traffic_sample(hist_sub["uuid"], 1000)
+db.add_traffic_sample(hist_sub["uuid"], 4000)
+hist = db.traffic_history(7)
+check("history has one entry per day", len(hist) == 7)
+check("history counts only the deltas for today", hist[-1]["total"] >= 4000 and hist[-1]["nodes"].get("de1", 0) >= 4000)
+check("history fills missing days with zeros", hist[0]["total"] == 0)
+
+db.get_or_create_user(700, "carol")
+db.set_user_note(700, "friend of alice")
+found_users = db.list_users(q="friend")
+check("notes are searchable in the users list", any(u["tg_id"] == 700 for u in found_users))
+check("note comes back in the users list", next(u for u in found_users if u["tg_id"] == 700)["note"] == "friend of alice")
+db.set_user_note(700, "   ")
+check("blank note clears it", db.get_user(700)["note"] is None)
+
 print(f"RESULT pass={passed} fail={failed}")
 sys.exit(1 if failed else 0)

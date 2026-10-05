@@ -685,8 +685,14 @@
         <div style="flex:0;min-width:180px"><div id="subs-status-filter" class="dd"></div></div>
         <div style="flex:0;min-width:0"><a class="btn ghost" style="white-space:nowrap;padding:11px 16px" href="/admin/api/subscriptions/export.csv">Экспорт CSV</a></div>
       </div>
+      <div id="subs-bulk" class="form-row" style="display:none;margin-bottom:12px;align-items:center">
+        <span class="page-sub" id="subs-bulk-count" style="flex:0;white-space:nowrap">выбрано: 0</span>
+        <div style="flex:0"><button class="btn ghost" onclick="bulkExtend()">Продлить</button></div>
+        <div style="flex:0"><button class="btn danger" onclick="bulkRevoke()">Отозвать</button></div>
+        <div style="flex:0"><button class="btn ghost" onclick="clearSubSelection()">Снять выбор</button></div>
+      </div>
       <div class="table-wrap"><table><thead><tr>
-        <th>Пользователь</th><th>Сервер</th><th>Тариф</th><th>Выдана</th><th>Истекает</th><th>Трафик</th><th>Статус</th><th></th>
+        <th style="width:34px"><input type="checkbox" id="subs-select-all" onchange="toggleAllSubs(this.checked)"></th><th>Пользователь</th><th>Сервер</th><th>Тариф</th><th>Выдана</th><th>Истекает</th><th>Трафик</th><th>Статус</th><th></th>
       </tr></thead><tbody id="subs-body"></tbody></table></div>
     </div>
 
@@ -921,6 +927,10 @@
       <div class="page-title">Трафик</div>
       <div class="page-sub">Суммарно по всем нодам, live через Xray Stats API</div>
       <div class="stat-grid" id="traffic-stat-grid" style="grid-template-columns:repeat(3,1fr)"></div>
+      <div class="section">
+        <div class="section-head"><h2>По дням</h2><span class="page-sub" id="traffic-history-total"></span></div>
+        <div id="traffic-chart"></div>
+      </div>
       <div class="section">
         <div class="section-head"><h2>По подпискам</h2></div>
         <div class="table-wrap"><table><thead><tr>
@@ -1203,6 +1213,14 @@
         </div>
         <label class="check" style="margin-top:12px"><input type="checkbox" id="feat-reminders"> Напоминать в боте об окончании подписки (за 3 дня и за сутки)</label>
         <label class="check" style="margin-top:8px"><input type="checkbox" id="feat-node-alerts"> Писать админам в Telegram, когда нода падает или поднимается</label>
+        <label class="check" style="margin-top:8px"><input type="checkbox" id="feat-backup"> Присылать зашифрованную резервную копию админам в Telegram</label>
+        <div class="form-row" style="margin-top:12px">
+          <div><label class="f">Как часто, часов</label><input type="text" id="feat-backup-hours" placeholder="24"></div>
+          <div><label class="f">Парольная фраза шифрования (<span id="feat-backup-pass-state">не задана</span>)</label><input type="password" id="feat-backup-pass" placeholder="не короче 8 символов"></div>
+          <div style="flex:0"><label class="f">&nbsp;</label><button class="btn ghost" onclick="saveBackupPassphrase()">Задать фразу</button></div>
+          <div style="flex:0"><label class="f">&nbsp;</label><button class="btn ghost" onclick="backupToTelegramNow()">Прислать сейчас</button></div>
+        </div>
+        <p class="check-hint">Копия включает базу и .env, поэтому шифруется парольной фразой, расшифровать на сервере можно командой <code>mbs decrypt файл</code>. Фразу нигде не показываем, храни её отдельно: без неё копию не открыть.</p>
         <div class="form-row" style="margin-top:12px">
           <div style="flex:0"><button class="btn" onclick="saveFeatures()">Сохранить</button></div>
         </div>
@@ -1582,7 +1600,35 @@ function rowAttr(i) {
   return `class="reveal" style="animation-delay:${Math.min(i, 10) * 0.025}s"`;
 }
 
+function renderTrafficChart(history) {
+  const box = document.getElementById("traffic-chart");
+  const days = history.days;
+  const max = Math.max(1, ...days.map((d) => d.total));
+  const total = days.reduce((a, d) => a + d.total, 0);
+  document.getElementById("traffic-history-total").textContent = total ? "всего за период: " + fmtBytesRu(total) : "";
+  if (!total) {
+    box.innerHTML = '<div class="empty">История накапливается с момента обновления, данные появятся через пару часов работы</div>';
+    return;
+  }
+  const w = 760, h = 160, pad = 4;
+  const slot = (w - pad * 2) / days.length;
+  const bw = Math.max(2, slot - 3);
+  const bars = days.map((d, i) => {
+    const bh = Math.max(d.total ? 2 : 0, Math.round((d.total / max) * (h - 24)));
+    const x = pad + i * slot + (slot - bw) / 2;
+    const parts = Object.entries(d.nodes).map(([code, bytes]) => (history.node_labels[code] || code) + ": " + fmtBytesRu(bytes)).join(", ");
+    const tip = d.day + " — " + fmtBytesRu(d.total) + (parts ? " (" + parts + ")" : "");
+    return `<rect x="${x.toFixed(1)}" y="${h - 18 - bh}" width="${bw.toFixed(1)}" height="${bh}" rx="2" fill="var(--accent)" opacity="${d.total ? 0.9 : 0.15}"><title>${esc(tip)}</title></rect>`;
+  }).join("");
+  const first = days[0].day.slice(5), last = days[days.length - 1].day.slice(5);
+  box.innerHTML = `<svg viewBox="0 0 ${w} ${h}" width="100%" style="display:block">${bars}
+    <text x="${pad}" y="${h - 3}" font-size="11" fill="var(--muted)">${first}</text>
+    <text x="${w - pad}" y="${h - 3}" font-size="11" fill="var(--muted)" text-anchor="end">${last}</text>
+    <text x="${w - pad}" y="10" font-size="11" fill="var(--muted)" text-anchor="end">пик ${fmtBytesRu(max)}</text></svg>`;
+}
+
 async function loadTraffic() {
+  api("/admin/api/traffic/history?days=30").then(renderTrafficChart).catch(() => {});
   const t = await api("/admin/api/traffic");
   const grid = document.getElementById("traffic-stat-grid");
   grid.innerHTML = [
@@ -1988,7 +2034,7 @@ async function loadDashboard() {
   const recent = await api("/admin/api/subscriptions?limit=8");
   const body = document.getElementById("recent-subs-body");
   body.innerHTML = recent.length ? recent.map((s, i) => `
-    <tr ${rowAttr(i)}><td>${s.username ? "@" + esc(s.username) : "tg" + s.tg_id}</td><td>${esc(s.node_label)}</td><td>${esc(s.plan_label)}</td>
+    <tr ${rowAttr(i)}><td><input type="checkbox" class="sub-check" data-uuid="${s.uuid}" ${selectedSubs.has(s.uuid) ? "checked" : ""} onchange="toggleSub('${s.uuid}', this.checked)"></td><td>${s.username ? "@" + esc(s.username) : "tg" + s.tg_id}</td><td>${esc(s.node_label)}</td><td>${esc(s.plan_label)}</td>
     <td>${fmtDate(s.expires_at)}</td><td>${statusBadge(s.active, s.days_left, s.held_at)}</td></tr>
   `).join("") : '<tr><td colspan="5"><div class="empty">Пока нет подписок</div></td></tr>';
 }
@@ -2008,7 +2054,60 @@ function renderSubsTable(subs) {
         : `<button class="muted-btn" onclick="holdSub('${s.uuid}')">Пауза</button>`) : ""}
       ${s.active ? `<button class="muted-btn" onclick="revokeSub('${s.uuid}')">Отозвать</button>` : ""}
     </td></tr>
-  `).join("") : '<tr><td colspan="8"><div class="empty">Пока нет подписок</div></td></tr>';
+  `).join("") : '<tr><td colspan="9"><div class="empty">Пока нет подписок</div></td></tr>';
+  updateBulkBar();
+}
+
+const selectedSubs = new Set();
+
+function updateBulkBar() {
+  const bar = document.getElementById("subs-bulk");
+  bar.style.display = selectedSubs.size ? "flex" : "none";
+  document.getElementById("subs-bulk-count").textContent = "выбрано: " + selectedSubs.size;
+}
+
+function toggleSub(uuid, on) {
+  if (on) selectedSubs.add(uuid); else selectedSubs.delete(uuid);
+  updateBulkBar();
+}
+
+function toggleAllSubs(on) {
+  document.querySelectorAll(".sub-check").forEach((el) => {
+    el.checked = on;
+    if (on) selectedSubs.add(el.dataset.uuid); else selectedSubs.delete(el.dataset.uuid);
+  });
+  updateBulkBar();
+}
+
+function clearSubSelection() {
+  selectedSubs.clear();
+  document.getElementById("subs-select-all").checked = false;
+  document.querySelectorAll(".sub-check").forEach((el) => { el.checked = false; });
+  updateBulkBar();
+}
+
+async function bulkRevoke() {
+  const n = selectedSubs.size;
+  if (!(await askConfirm("Отозвать выбранные подписки (" + n + ")? Доступ пропадёт сразу.", { ok: "Отозвать" }))) return;
+  try {
+    const res = await api("/admin/api/subscriptions/bulk", { method: "POST", body: JSON.stringify({ uuids: [...selectedSubs], action: "revoke" }) });
+    toast("Отозвано: " + res.done + (res.failed.length ? ", не вышло: " + res.failed.length : ""), res.failed.length ? "warn" : "success", 2600);
+    clearSubSelection();
+    loadSubscriptions();
+  } catch (e) { toast(e.message, "error"); }
+}
+
+async function bulkExtend() {
+  const v = await askNumber("Продлить выбранные, дней", "На сколько дней продлить каждую из " + selectedSubs.size + " подписок. Остановленные включатся снова.", "30");
+  if (v === null) return;
+  const days = parseInt(v, 10);
+  if (isNaN(days) || days <= 0) { toast("Нужно целое число дней больше нуля", "error"); return; }
+  try {
+    const res = await api("/admin/api/subscriptions/bulk", { method: "POST", body: JSON.stringify({ uuids: [...selectedSubs], action: "extend", days }) });
+    toast("Продлено: " + res.done + (res.failed.length ? ", не вышло: " + res.failed.length : ""), res.failed.length ? "warn" : "success", 2600);
+    clearSubSelection();
+    loadSubscriptions();
+  } catch (e) { toast(e.message, "error"); }
 }
 
 function subStatus(s) {
@@ -2286,6 +2385,9 @@ async function loadFeatures() {
   document.getElementById("feat-default-gb").value = f.default_traffic_gb;
   document.getElementById("feat-reminders").checked = !!f.reminders_enabled;
   document.getElementById("feat-node-alerts").checked = !!f.node_alerts_enabled;
+  document.getElementById("feat-backup").checked = !!f.backup_tg_enabled;
+  document.getElementById("feat-backup-hours").value = f.backup_tg_hours;
+  document.getElementById("feat-backup-pass-state").textContent = f.backup_has_passphrase ? "задана" : "не задана";
   document.getElementById("feat-result").innerHTML = "";
 }
 
@@ -2299,6 +2401,8 @@ async function saveFeatures() {
     default_traffic_gb: document.getElementById("feat-default-gb").value.trim() || "0",
     reminders_enabled: document.getElementById("feat-reminders").checked,
     node_alerts_enabled: document.getElementById("feat-node-alerts").checked,
+    backup_tg_enabled: document.getElementById("feat-backup").checked,
+    backup_tg_hours: document.getElementById("feat-backup-hours").value.trim() || "24",
   };
   try {
     await api("/admin/api/features", { method: "POST", body: JSON.stringify(body) });
@@ -2306,6 +2410,23 @@ async function saveFeatures() {
   } catch (e) {
     result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--red)">Не получилось: ' + esc(e.message) + '</p>';
   }
+}
+
+async function saveBackupPassphrase() {
+  const passphrase = document.getElementById("feat-backup-pass").value.trim();
+  try {
+    await api("/admin/api/backup/passphrase", { method: "POST", body: JSON.stringify({ passphrase }) });
+    document.getElementById("feat-backup-pass").value = "";
+    toast("Парольная фраза сохранена", "success", 1800);
+    loadFeatures();
+  } catch (e) { toast(e.message, "error"); }
+}
+
+async function backupToTelegramNow() {
+  try {
+    await api("/admin/api/backup/telegram-now", { method: "POST" });
+    toast("Копия придёт в Telegram в течение пары минут", "success", 2600);
+  } catch (e) { toast(e.message, "error"); }
 }
 
 function askNumber(title, hint, value) {
@@ -2786,6 +2907,9 @@ const AUDIT_META = {
   "gift.create": ["Гифт-код создан", "sub"],
   "promo.create": ["Промокод создан", "sub"],
   "token.create": ["API-токен создан", "sub"],
+  "sub.bulk": ["Пакетное действие с подписками", "sub"],
+  "user.note": ["Заметка о юзере изменена", "sub"],
+  "backup.telegram": ["Резервная копия отправлена в Telegram", "sub"],
   "token.revoke": ["API-токен отозван", "sub"],
   "promo.edit": ["Промокод изменён", "sub"],
   "promo.delete": ["Промокод удалён", "sub"],
@@ -2883,17 +3007,28 @@ function userLabel(u) {
   return u.username ? "@" + u.username : "tg" + u.tg_id;
 }
 
+async function editUserNote(tgId, current) {
+  const v = await askNumber("Заметка о юзере", "Видна только админам. Пустая заметка удалит текущую.", current);
+  if (v === null) return;
+  try {
+    await api("/admin/api/users/" + tgId + "/note", { method: "POST", body: JSON.stringify({ note: v }) });
+    toast("Заметка сохранена", "success", 1800);
+    loadUsers();
+  } catch (e) { toast(e.message, "error"); }
+}
+
 function renderUsers(rows) {
   const body = document.getElementById("users-body");
   body.innerHTML = rows.length ? rows.map((u, i) => `
     <tr ${rowAttr(i)}>
-      <td><b>${esc(userLabel(u))}</b>${u.username ? ` <span class="check-hint mono">tg${u.tg_id}</span>` : ""}</td>
+      <td><b>${esc(userLabel(u))}</b>${u.username ? ` <span class="check-hint mono">tg${u.tg_id}</span>` : ""}${u.note ? `<div class="check-hint" style="margin-top:2px">${esc(u.note)}</div>` : ""}</td>
       <td>${u.subs_active ? `<span class="badge ok">${u.subs_active} активн.</span>` : '<span class="badge plain warn">нет активных</span>'} <span class="check-hint">из ${u.subs_total}</span></td>
       <td>${u.active_until ? fmtDate(u.active_until) : '<span class="check-hint">—</span>'}</td>
       <td><span class="mono">${u.devices}</span></td>
       <td>${fmtDate(u.created_at)}</td>
       <td class="act">
         <button class="muted-btn" onclick="openUserCard(${u.tg_id}, '${esc(userLabel(u))}')">Карточка</button>
+        <button class="muted-btn" onclick="editUserNote(${u.tg_id}, '${esc(u.note || "").replace(/'/g, "&#39;")}')">Заметка</button>
         <button class="muted-btn" style="color:var(--accent)" onclick="openUserCard(${u.tg_id}, '${esc(userLabel(u))}')">Выдать подписку</button>
       </td>
     </tr>`).join("") : '<tr><td colspan="6"><div class="empty">Никого не нашлось. Если знаешь Telegram ID — введи его выше и нажми «Выдать по ID».</div></td></tr>';

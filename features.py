@@ -1,3 +1,7 @@
+import os
+import time
+
+import backup
 import db
 import nodeprov
 import settings
@@ -92,3 +96,40 @@ def traffic_text(sub: dict) -> str:
     if limit > 0:
         return f"{format_bytes(used)} из {format_bytes(limit)}"
     return f"{format_bytes(used)}, без лимита"
+
+
+BACKUP_MARKER = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".last_tg_backup")
+BACKUP_NOW_FLAG = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".backup_now")
+
+
+def request_backup_now():
+    with open(BACKUP_NOW_FLAG, "w") as f:
+        f.write("1")
+
+
+def telegram_backup_due() -> bool:
+    feats = settings.get_features()
+    if not settings.backup_passphrase():
+        return False
+    if os.path.exists(BACKUP_NOW_FLAG):
+        return True
+    if not feats["backup_tg_enabled"]:
+        return False
+    if not os.path.exists(BACKUP_MARKER):
+        return True
+    return time.time() - os.path.getmtime(BACKUP_MARKER) >= feats["backup_tg_hours"] * 3600
+
+
+def make_encrypted_backup():
+    data = backup.encrypt_backup(backup.create_backup(), settings.backup_passphrase())
+    name = time.strftime("mbs-backup-%Y%m%d-%H%M%S.tar.gz.enc", time.gmtime())
+    return name, data
+
+
+def mark_backup_done():
+    with open(BACKUP_MARKER, "w") as f:
+        f.write(str(int(time.time())))
+    try:
+        os.remove(BACKUP_NOW_FLAG)
+    except OSError:
+        pass
