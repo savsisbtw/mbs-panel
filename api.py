@@ -10,7 +10,7 @@ import subprocess
 import urllib.request
 import uuid as uuidlib
 from concurrent.futures import ThreadPoolExecutor
-from fastapi import FastAPI, HTTPException, Request, Response, File, UploadFile
+from fastapi import FastAPI, HTTPException, Request, Response, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Body
 from fastapi.responses import HTMLResponse, PlainTextResponse, FileResponse
@@ -19,6 +19,7 @@ import backup
 import chains
 import db
 import features
+import importer
 import formats
 import legal
 import links
@@ -87,6 +88,7 @@ AUDIT_RULES = [
     ("POST", r"^/admin/api/webhook-settings$", "settings.webhook"),
     ("POST", r"^/admin/api/hwid-settings$", "settings.hwid"),
     ("POST", r"^/admin/api/features$", "settings.features"),
+    ("POST", r"^/admin/api/import$", "import.run"),
     ("POST", r"^/admin/api/subscriptions/bulk$", "sub.bulk"),
     ("POST", r"^/admin/api/users/-?\d+/note$", "user.note"),
     ("POST", r"^/admin/api/backup/telegram-now$", "backup.telegram"),
@@ -335,9 +337,11 @@ def cabinet(token: str):
         out.append({
             "node": s["node"],
             "plan": s["plan"],
-            "plan_label": plan["label"] if plan else s["plan"],
+            "plan_label": plan["label"] if plan else ("Пробный" if s["plan"] == "trial" else s["plan"]),
             "expires_at": s["expires_at"],
             "days_left": _days_left(s),
+            "traffic_used": s.get("traffic_used", 0),
+            "traffic_limit": s.get("traffic_limit"),
         })
     return {
         "username": user["username"],
@@ -1293,6 +1297,38 @@ def admin_bulk_subscriptions(request: Request, body: dict = Body(...)):
         except Exception:
             failed.append(sub_uuid)
     return {"done": done, "failed": failed}
+
+
+@app.post("/admin/api/import")
+async def admin_import_users(request: Request, file: UploadFile = File(...), source: str = Form(...),
+                             node: str = Form(...), include_expired: str = Form("false")):
+    require_admin(request)
+    target = db.get_node(node)
+    if not target or not target["enabled"] or target["status"] != "active":
+        raise HTTPException(400, "выбери рабочую ноду, на которую переносим клиентов")
+    data = await file.read()
+    try:
+        clients = importer.parse_upload(source, data)
+    except importer.ImportError_ as e:
+        raise HTTPException(400, str(e))
+    keep_expired = include_expired.lower() == "true"
+    counts = {"created": 0, "inactive": 0, "exists": 0, "skipped": 0}
+    for c in clients:
+        expired = bool(c["expires_at"]) and c["expires_at"] <= db.now_iso()
+        if (expired or not c["enabled"]) and not keep_expired:
+            counts["skipped"] += 1
+            continue
+        outcome = db.import_subscription(
+            c["tg_id"], c["label"], target["code"], c["uuid"], c["expires_at"], c["traffic_limit"], c["enabled"],
+        )
+        counts[outcome] += 1
+        if outcome == "created":
+            try:
+                await asyncio.to_thread(xray_manager.add_client_to_node, target, c["uuid"], c["uuid"])
+            except Exception:
+                counts["created"] -= 1
+                counts["skipped"] += 1
+    return {"found": len(clients), **counts}
 
 
 @app.get("/admin/api/promos")

@@ -1229,6 +1229,21 @@
       </div>
 
       <div class="section" style="margin-top:20px">
+        <div class="section-head"><h2>Перенос с 3x-ui и Marzban</h2></div>
+        <p class="page-sub" style="margin-bottom:16px">Загрузи файл базы старой панели (3x-ui: <code>x-ui.db</code>, Marzban: <code>db.sqlite3</code>). Клиенты VLESS переедут на выбранную ноду с теми же UUID, поэтому их ссылки продолжат работать, если у ноды те же адрес и ключи Reality. Уже существующие подписки пропускаются, файл только читается.</p>
+        <div class="form-row">
+          <div><label class="f">Откуда</label><div id="import-source" class="dd"></div></div>
+          <div><label class="f">На какую ноду</label><div id="import-node" class="dd"></div></div>
+          <div><label class="f">Файл базы</label><input type="file" id="import-file"></div>
+        </div>
+        <label class="check" style="margin-top:12px"><input type="checkbox" id="import-expired"> Переносить и просроченные (они появятся как неактивные)</label>
+        <div class="form-row" style="margin-top:12px">
+          <div style="flex:0"><button class="btn" onclick="runImport()">Перенести</button></div>
+        </div>
+        <div id="import-result"></div>
+      </div>
+
+      <div class="section" style="margin-top:20px">
         <div class="section-head"><h2>API-токены</h2></div>
         <p class="page-sub" style="margin-bottom:16px">Для ресселлеров и своих скриптов: выдавать, продлевать и отзывать подписки по HTTP. Заголовок <code>Authorization: Bearer токен</code>, адрес <code>/api/v1/...</code> на домене подписки. Токен показывается один раз при создании.</p>
         <div class="form-row">
@@ -1354,7 +1369,7 @@ function showView(name) {
   if (name === "traffic") loadTraffic();
   if (name === "audit") loadAudit();
   if (name === "payments") { loadPayments(); loadPaymentsSettings(); }
-  if (name === "settings") { loadBrandName(); loadBotSettings(); loadAdmins(); loadTotpStatus(); loadWebhookSettings(); loadHwidSettings(); loadFeatures(); loadApiTokens(); }
+  if (name === "settings") { loadBrandName(); loadBotSettings(); loadAdmins(); loadTotpStatus(); loadWebhookSettings(); loadHwidSettings(); loadFeatures(); loadApiTokens(); loadImportForm(); }
 }
 
 const COUNTRIES = [
@@ -1527,6 +1542,12 @@ function initDropdowns() {
       if (c) document.getElementById("nm-label").value = `${flagEmoji(code)} ${c[1]}`;
     },
   });
+  DD.importSource = createDropdown("import-source", {
+    options: [{ value: "xui", label: "3x-ui" }, { value: "marzban", label: "Marzban" }],
+    placeholder: "Откуда",
+  });
+  DD.importSource.setValue("xui");
+  DD.importNode = createDropdown("import-node", { options: [], placeholder: "Нода" });
   DD.promoKind = createDropdown("promo-kind", {
     options: [
       { value: "percent", label: "Процент скидки" },
@@ -2284,6 +2305,34 @@ async function createGift() {
   }
 }
 
+async function loadImportForm() {
+  const nodes = await api("/admin/api/nodes");
+  const options = nodes.filter((n) => n.enabled && n.status === "active").map((n) => ({ value: n.code, label: n.label }));
+  DD.importNode.setOptions(options);
+  if (!DD.importNode.getValue() && options.length) DD.importNode.setValue(options[0].value);
+}
+
+async function runImport() {
+  const result = document.getElementById("import-result");
+  const fileEl = document.getElementById("import-file");
+  if (!fileEl.files.length) { toast("Выбери файл базы", "warn"); return; }
+  const form = new FormData();
+  form.append("file", fileEl.files[0]);
+  form.append("source", DD.importSource.getValue());
+  form.append("node", DD.importNode.getValue());
+  form.append("include_expired", document.getElementById("import-expired").checked ? "true" : "false");
+  result.innerHTML = '<p class="page-sub" style="margin-top:10px">Переношу…</p>';
+  try {
+    const res = await fetch("/admin/api/import", { method: "POST", body: form });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || ("ошибка " + res.status));
+    result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--green)">Найдено ' + data.found + ': создано ' + data.created + ', неактивных ' + data.inactive + ', уже были ' + data.exists + ', пропущено ' + data.skipped + '</p>';
+    fileEl.value = "";
+  } catch (e) {
+    result.innerHTML = '<p class="page-sub" style="margin-top:10px;color:var(--red)">Не получилось: ' + esc(e.message) + '</p>';
+  }
+}
+
 async function loadApiTokens() {
   const tokens = await api("/admin/api/tokens");
   const body = document.getElementById("api-tokens-body");
@@ -2907,6 +2956,7 @@ const AUDIT_META = {
   "gift.create": ["Гифт-код создан", "sub"],
   "promo.create": ["Промокод создан", "sub"],
   "token.create": ["API-токен создан", "sub"],
+  "import.run": ["Перенос клиентов из другой панели", "sub"],
   "sub.bulk": ["Пакетное действие с подписками", "sub"],
   "user.note": ["Заметка о юзере изменена", "sub"],
   "backup.telegram": ["Резервная копия отправлена в Telegram", "sub"],

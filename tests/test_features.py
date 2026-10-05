@@ -255,5 +255,60 @@ check("note comes back in the users list", next(u for u in found_users if u["tg_
 db.set_user_note(700, "   ")
 check("blank note clears it", db.get_user(700)["note"] is None)
 
+import json as _json
+import sqlite3 as _sqlite
+import importer
+
+xui_path = os.path.join(tmp, "x-ui.db")
+xc = _sqlite.connect(xui_path)
+xc.execute("CREATE TABLE inbounds (id INTEGER, protocol TEXT, settings TEXT)")
+future_ms = int((datetime.datetime.utcnow() + datetime.timedelta(days=20)).timestamp() * 1000)
+xc.execute("INSERT INTO inbounds VALUES (1, 'vless', ?)", (_json.dumps({"clients": [
+    {"id": "aaaaaaaa-0000-0000-0000-000000000001", "email": "tgguy", "tgId": "555", "expiryTime": future_ms, "totalGB": 5 * GB, "enable": True},
+    {"id": "aaaaaaaa-0000-0000-0000-000000000002", "email": "plain", "expiryTime": 0, "totalGB": 0, "enable": True},
+    {"id": "aaaaaaaa-0000-0000-0000-000000000003", "email": "old", "expiryTime": 1000, "enable": True},
+]}),))
+xc.execute("INSERT INTO inbounds VALUES (2, 'vmess', ?)", (_json.dumps({"clients": [{"id": "ignored"}]}),))
+xc.commit()
+xc.close()
+xui_clients = importer.parse_xui(xui_path)
+check("xui import reads only vless clients", len(xui_clients) == 3)
+check("xui keeps the telegram id when present", xui_clients[0]["tg_id"] == 555)
+check("xui limit is carried over in bytes", xui_clients[0]["traffic_limit"] == 5 * GB and xui_clients[1]["traffic_limit"] is None)
+check("xui zero expiry means no expiry", xui_clients[1]["expires_at"] is None)
+check("xui client without telegram id gets a stable negative id", xui_clients[1]["tg_id"] < 0 and xui_clients[1]["tg_id"] == importer.synthetic_tg_id("plain"))
+
+mz_path = os.path.join(tmp, "marzban.db")
+mc = _sqlite.connect(mz_path)
+mc.execute("CREATE TABLE users (id INTEGER, username TEXT, status TEXT, data_limit INTEGER, expire TEXT)")
+mc.execute("CREATE TABLE proxies (id INTEGER, user_id INTEGER, type TEXT, settings TEXT)")
+mc.execute("INSERT INTO users VALUES (1, 'alice', 'active', 1073741824, '2099-01-01 00:00:00')")
+mc.execute("INSERT INTO users VALUES (2, 'bob', 'disabled', NULL, NULL)")
+mc.execute("INSERT INTO proxies VALUES (1, 1, 'vless', ?)", (_json.dumps({"id": "bbbbbbbb-0000-0000-0000-000000000001"}),))
+mc.execute("INSERT INTO proxies VALUES (2, 2, 'vless', ?)", (_json.dumps({"id": "bbbbbbbb-0000-0000-0000-000000000002"}),))
+mc.execute("INSERT INTO proxies VALUES (3, 1, 'trojan', ?)", (_json.dumps({"password": "x"}),))
+mc.commit()
+mc.close()
+mz_clients = importer.parse_marzban(mz_path)
+check("marzban import reads vless proxies only", len(mz_clients) == 2)
+check("marzban expiry and limit are parsed", mz_clients[0]["expires_at"].startswith("2099") and mz_clients[0]["traffic_limit"] == GB)
+check("marzban disabled status is carried over", mz_clients[1]["enabled"] is False)
+
+try:
+    importer.parse_xui(mz_path)
+    check("wrong source file is refused", False)
+except importer.ImportError_:
+    check("wrong source file is refused", True)
+try:
+    importer.parse_upload("xui", b"this is not sqlite")
+    check("non sqlite upload is refused", False)
+except importer.ImportError_:
+    check("non sqlite upload is refused", True)
+
+outcome = db.import_subscription(555, "tgguy", "de1", "aaaaaaaa-0000-0000-0000-000000000001", xui_clients[0]["expires_at"], 5 * GB, True)
+check("import creates a live subscription", outcome == "created" and db.get_subscription("aaaaaaaa-0000-0000-0000-000000000001")["traffic_limit"] == 5 * GB)
+check("import twice does not duplicate", db.import_subscription(555, "tgguy", "de1", "aaaaaaaa-0000-0000-0000-000000000001", None, None, True) == "exists")
+check("import of an expired client is inactive", db.import_subscription(-5, "old", "de1", "aaaaaaaa-0000-0000-0000-000000000003", xui_clients[2]["expires_at"], None, True) == "inactive")
+
 print(f"RESULT pass={passed} fail={failed}")
 sys.exit(1 if failed else 0)

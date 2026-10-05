@@ -110,11 +110,20 @@ async function load() {
     const data = await res.json();
     history.replaceState(null, "", `?token=${encodeURIComponent(token)}`);
     let html = "";
+    const trafficLine = (s) => {
+      const fmt = (n) => {
+        const u = ["Б", "КБ", "МБ", "ГБ", "ТБ"];
+        let v = n || 0, i = 0;
+        while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+        return (i === 0 ? Math.round(v) : v.toFixed(1)) + " " + u[i];
+      };
+      return s.traffic_limit ? "Трафик: " + fmt(s.traffic_used) + " из " + fmt(s.traffic_limit) : "Трафик: " + fmt(s.traffic_used) + ", без лимита";
+    };
     if (data.subscriptions.length === 0) {
       html += `<p class="muted" style="margin-top:14px">Активных подписок нет</p>`;
     } else {
       data.subscriptions.forEach((s, i) => {
-        html += `<div class="sub-item" style="animation-delay:${i * 0.06}s"><div class="top"><span>${esc(s.node)}</span><span class="days">${s.days_left} дн.</span></div><div class="muted">${esc(s.plan_label)}, до ${s.expires_at.slice(0,10)}</div></div>`;
+        html += `<div class="sub-item" style="animation-delay:${i * 0.06}s"><div class="top"><span>${esc(s.node)}</span><span class="days">${s.days_left} дн.</span></div><div class="muted">${esc(s.plan_label)}, до ${s.expires_at.slice(0,10)}</div><div class="muted">${trafficLine(s)}</div></div>`;
       });
     }
     html += `<div class="qr-box" id="qr"></div>`;

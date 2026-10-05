@@ -1399,3 +1399,20 @@ def set_user_note(tg_id: int, note: str | None):
     note = (note or "").strip()[:500] or None
     with get_conn() as conn:
         conn.execute("UPDATE users SET note=? WHERE tg_id=?", (note, tg_id))
+
+
+def import_subscription(tg_id: int, label: str, node: str, client_uuid: str, expires_at: str | None,
+                        traffic_limit: int | None, enabled: bool) -> str:
+    get_or_create_user(tg_id, label)
+    far_future = (datetime.datetime.utcnow() + datetime.timedelta(days=3650)).isoformat()
+    expires = expires_at or far_future
+    live = bool(enabled) and expires > now_iso()
+    with get_conn() as conn:
+        if conn.execute("SELECT 1 FROM subscriptions WHERE uuid=?", (client_uuid,)).fetchone():
+            return "exists"
+        conn.execute(
+            "INSERT INTO subscriptions (uuid, tg_id, node, plan, created_at, expires_at, active, source, traffic_limit) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (client_uuid, tg_id, node, "import", now_iso(), expires, 1 if live else 0, "import", traffic_limit),
+        )
+    return "created" if live else "inactive"
